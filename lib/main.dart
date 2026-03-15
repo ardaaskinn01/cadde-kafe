@@ -1,12 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'core/services/supabase_service.dart';
-import 'views/auth/login_view.dart';
+import 'auth_wrapper.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
+  // .env dosyasını yükle
+  await dotenv.load(fileName: ".env");
+  
   // Supabase bağlantısını başlat
   await SupabaseService.instance.initialize();
+  
+  // Türkçe tarih formatlarını yükle
+  await initializeDateFormatting('tr_TR', null);
   
   runApp(const MyApp());
 }
@@ -33,7 +41,7 @@ class MyApp extends StatelessWidget {
           fillColor: Colors.grey.shade100,
         ),
       ),
-      home: const LoginView(),
+      home: const AuthWrapper(),
     );
   }
 }

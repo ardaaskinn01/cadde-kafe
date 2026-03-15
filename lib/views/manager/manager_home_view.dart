@@ -1,124 +1,369 @@
 import 'package:flutter/material.dart';
+import '../../core/services/auth_service.dart';
+import '../../auth_wrapper.dart';
+import '../../core/services/supabase_service.dart';
 import 'todays_status_view.dart';
 import 'add_personnel_view.dart';
 import 'history_view.dart';
 import 'waiter_activity_view.dart';
+import 'manager_cashier_view.dart';
+import 'menu_management_view.dart';
 
-class ManagerHomeView extends StatelessWidget {
+class ManagerHomeView extends StatefulWidget {
   const ManagerHomeView({Key? key}) : super(key: key);
+
+  @override
+  State<ManagerHomeView> createState() => _ManagerHomeViewState();
+}
+
+class _ManagerHomeViewState extends State<ManagerHomeView> {
+  final AuthService _authService = AuthService();
+  final _supabase = SupabaseService.instance.client;
+  
+  String _managerName = "Yönetici";
+  String _activeTablesCount = "-";
+  String _todayRevenue = "-";
+  String _personnelCount = "-";
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAllData();
+  }
+
+  Future<void> _loadAllData() async {
+    await Future.wait([
+      _loadProfile(),
+      _loadStats(),
+    ]);
+  }
+
+  Future<void> _loadProfile() async {
+    final profile = await _authService.getCurrentProfile();
+    if (profile != null && mounted) {
+      setState(() {
+        _managerName = profile['full_name'] ?? "Yönetici";
+      });
+    }
+  }
+
+  Future<void> _loadStats() async {
+    try {
+      final now = DateTime.now();
+      final todayStart = DateTime(now.year, now.month, now.day).toIso8601String();
+
+      // 1. Aktif Masalar (Occupied olanlar)
+      final tablesResponse = await _supabase
+          .from('tables')
+          .select('id')
+          .eq('status', 'occupied');
+      
+      // 2. Günün Cirosu
+      final ordersResponse = await _supabase
+          .from('orders')
+          .select('total_amount')
+          .gte('created_at', todayStart);
+
+      // 3. Personel Sayısı (Sadece garsonlar)
+      final personnelResponse = await _supabase
+          .from('profiles')
+          .select('id')
+          .eq('role', 'garson');
+
+      if (!mounted) return;
+
+      double revenue = 0;
+      final List ordersList = ordersResponse as List;
+      for (var o in ordersList) {
+        revenue += (o['total_amount'] ?? 0.0);
+      }
+
+      setState(() {
+        _activeTablesCount = (tablesResponse as List).length.toString();
+        _todayRevenue = '₺${revenue.toStringAsFixed(0)}';
+        _personnelCount = (personnelResponse as List).length.toString();
+      });
+    } catch (e) {
+      debugPrint('Stat yükleme hatası: $e');
+      if (mounted) {
+        setState(() {
+          _activeTablesCount = "0";
+          _todayRevenue = "₺0";
+          _personnelCount = "0";
+        });
+      }
+    }
+  }
+
+  void _logout() async {
+    await _authService.signOut();
+    if (mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => const AuthWrapper()),
+        (route) => false,
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.grey.shade50,
       appBar: AppBar(
-        title: const Text('Yönetici Paneli'),
-        centerTitle: true,
+        elevation: 0,
+        backgroundColor: Colors.brown.shade800,
+        foregroundColor: Colors.white,
+        title: const Text(
+          'YÖNETİCİ PANELİ',
+          style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.2),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadStats,
+            tooltip: 'Verileri Yenile',
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () => _showLogoutDialog(context),
+            tooltip: 'Çıkış Yap',
+          ),
+        ],
       ),
-      // Drawer yok, her şey ana ekranda
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // 2. Anlık durumu izleyebilmeli (Kasa ile aynı veya benzer görünüm)
-            Card(
-              elevation: 4,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  children: const [
-                    Text(
-                      'Anlık Durum (Kasa Görünümü)',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
-                    SizedBox(height: 10),
-                    Text('Aktif Siparişler: 5'),
-                    Text('Bekleyen Siparişler: 2'),
-                    // Buraya ileride kasa ekranının içeriği widget olarak eklenebilir.
-                  ],
+      body: CustomScrollView(
+        slivers: [
+          // Header Section
+          SliverToBoxAdapter(
+            child: Container(
+              padding: const EdgeInsets.all(24.0),
+              decoration: BoxDecoration(
+                color: Colors.brown.shade800,
+                borderRadius: const BorderRadius.only(
+                  bottomLeft: Radius.circular(30),
+                  bottomRight: Radius.circular(30),
                 ),
               ),
-            ),
-            const SizedBox(height: 20),
-            
-            // 3. Bugünkü durum (Sipariş geçmişi, ciro)
-            ElevatedButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const TodaysStatusView()),
-                );
-              },
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const SizedBox(width: 16),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Merhaba,',
+                            style: TextStyle(color: Colors.brown.shade100, fontSize: 16),
+                          ),
+                          Text(
+                            _managerName,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _buildStatItem('Aktif Masalar', _activeTablesCount, Icons.table_restaurant),
+                        _buildStatItem('Günün Cirosu', _todayRevenue, Icons.payments),
+                        _buildStatItem('Personel', _personnelCount, Icons.people),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-              child: const Text(
-                'Bugünün Durumu (Ciro ve Geçmiş)',
-                style: TextStyle(fontSize: 16),
-              ),
             ),
-            const SizedBox(height: 20),
-            
-            // 5. Seçimli (Günlük, Haftalık vb.) Geçmiş Sayfası
-            ElevatedButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const HistoryView()),
-                );
-              },
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.all(20),
-                backgroundColor: Colors.blueGrey.shade100,
-              ),
-              child: const Text('Geniş Kapsamlı Geçmiş / İstatistikler', style: TextStyle(fontSize: 16)),
-            ),
-            const SizedBox(height: 20),
+          ),
 
-            // 7. Garson Aktivite Takibi
-            ElevatedButton(
-              onPressed: () {
-                Navigator.push(
+          // Menu Grid
+          SliverPadding(
+            padding: const EdgeInsets.all(20.0),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                mainAxisSpacing: 16,
+                crossAxisSpacing: 16,
+                childAspectRatio: 1.1,
+              ),
+              delegate: SliverChildListDelegate([
+                _buildMenuCard(
                   context,
-                  MaterialPageRoute(builder: (context) => const WaiterActivityView()),
-                );
-              },
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.all(20),
-                backgroundColor: Colors.purple.shade50,
-              ),
-              child: const Text('Garsonlar / Aktivite Takibi', style: TextStyle(fontSize: 16)),
-            ),
-            const SizedBox(height: 20),
-
-            // 6. Personel Ekleme
-            ElevatedButton(
-              onPressed: () {
-                Navigator.push(
+                  title: 'Kasa İşlevleri',
+                  subtitle: 'Masa & Adisyon',
+                  icon: Icons.point_of_sale,
+                  color: Colors.brown.shade800,
+                  onTap: () async {
+                    await Navigator.push(context, MaterialPageRoute(builder: (context) => const ManagerCashierView()));
+                    _loadStats();
+                  },
+                ),
+                _buildMenuCard(
                   context,
-                  MaterialPageRoute(builder: (context) => const AddPersonnelView()),
-                );
-              },
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.all(20),
-                backgroundColor: Colors.orange.shade100,
-              ),
-              child: const Text('Personel Ekle', style: TextStyle(fontSize: 16)),
+                  title: 'Günün Özeti',
+                  subtitle: 'Satış & Detaylar',
+                  icon: Icons.today,
+                  color: Colors.brown.shade800,
+                  onTap: () async {
+                    await Navigator.push(context, MaterialPageRoute(builder: (context) => const TodaysStatusView()));
+                    _loadStats();
+                  },
+                ),
+                _buildMenuCard(
+                  context,
+                  title: 'Garsonlar',
+                  subtitle: 'Aktivite Takibi',
+                  icon: Icons.person_search,
+                  color: Colors.brown.shade800,
+                  onTap: () async {
+                    await Navigator.push(context, MaterialPageRoute(builder: (context) => const WaiterActivityView()));
+                    _loadStats();
+                  },
+                ),
+                _buildMenuCard(
+                  context,
+                  title: 'Geçmiş Kayıtlar',
+                  subtitle: 'Tüm İstatistikler',
+                  icon: Icons.history,
+                  color: Colors.brown.shade800,
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const HistoryView())),
+                ),
+                _buildMenuCard(
+                  context,
+                  title: 'Personel Yönetimi',
+                  subtitle: 'Yeni Kayıt & Yetki',
+                  icon: Icons.group_add,
+                  color: Colors.brown.shade800,
+                  onTap: () async {
+                    await Navigator.push(context, MaterialPageRoute(builder: (context) => const AddPersonnelView()));
+                    _loadStats();
+                  },
+                ),
+                _buildMenuCard(
+                  context,
+                  title: 'Menü Yönetimi',
+                  subtitle: 'Ürün & Fiyatlar',
+                  icon: Icons.restaurant_menu,
+                  color: Colors.brown.shade800,
+                  onTap: () async {
+                    await Navigator.push(context, MaterialPageRoute(builder: (context) => const MenuManagementView()));
+                    _loadStats();
+                  },
+                ),
+              ]),
             ),
-            const SizedBox(height: 20),
+          ),
+          
+          const SliverToBoxAdapter(child: SizedBox(height: 20)),
+        ],
+      ),
+    );
+  }
 
-            // Ürün ve Menü Yönetimi
-            ElevatedButton(
-              onPressed: () {
-                // TODO: Menü düzenleme ekranına git
-              },
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.all(20),
-              ),
-              child: const Text('Ürün ve Menü Yönetimi', style: TextStyle(fontSize: 16)),
+  Widget _buildStatItem(String label, String value, IconData icon) {
+    return Column(
+      children: [
+        Icon(icon, color: Colors.brown.shade100, size: 24),
+        const SizedBox(height: 8),
+        Text(
+          value,
+          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        Text(
+          label,
+          style: TextStyle(color: Colors.brown.shade200, fontSize: 12),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMenuCard(BuildContext context,
+      {required String title,
+      required String subtitle,
+      required IconData icon,
+      required Color color,
+      required VoidCallback onTap}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: color, size: 30),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 15,
+                color: Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showLogoutDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Çıkış Yap'),
+        content: const Text('Oturumun kapatılacak. Emin misin?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('İptal')),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context); // Diyalogu kapat
+              _logout(); // Çıkış işlemini başlat
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Çıkış Yap', style: TextStyle(color: Colors.white)),
+          ),
+        ],
       ),
     );
   }

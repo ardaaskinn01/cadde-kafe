@@ -14,36 +14,52 @@ class _AddPersonnelViewState extends State<AddPersonnelView> {
   final _passwordController = TextEditingController();
   final AuthService _authService = AuthService();
   
-  String _selectedRole = 'garson';
   bool _isLoading = false;
+  bool _isPasswordVisible = false;
 
   void _createPersonnel() async {
-    if (_nameController.text.isEmpty || _usernameController.text.isEmpty || _passwordController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lütfen tüm alanları doldurun.')));
+    final name = _nameController.text.trim();
+    final username = _usernameController.text.trim();
+    final password = _passwordController.text.trim();
+
+    if (name.isEmpty || username.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Lütfen tüm alanları doldurunuz')),
+      );
       return;
     }
     
     setState(() => _isLoading = true);
     
     try {
-      // Oluşturduğumuz AuthService içindeki addPersonnel metodunu kullanıyoruz
+      // Rolü varsayılan olarak 'garson' yapıyoruz
       await _authService.addPersonnel(
-        username: _usernameController.text,
-        password: _passwordController.text,
-        fullName: _nameController.text,
-        role: _selectedRole,
+        username: username,
+        password: password,
+        fullName: name,
+        role: 'garson',
       );
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Personel başarıyla oluşturuldu!')),
+          const SnackBar(
+            content: Text('Garson hesabı başarıyla oluşturuldu!'),
+            backgroundColor: Colors.green,
+          ),
         );
-        Navigator.pop(context); // İşlem bitince geri dön
+        Navigator.pop(context);
       }
     } catch (e) {
       if (mounted) {
+        String msg = e.toString();
+        if (msg.contains('already exists')) {
+          msg = 'Bu kullanıcı adı zaten kullanımda.';
+        }
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Hata: ${e.toString()}')),
+          SnackBar(
+            content: Text('Hata: $msg'),
+            backgroundColor: Colors.redAccent,
+          ),
         );
       }
     } finally {
@@ -54,69 +70,188 @@ class _AddPersonnelViewState extends State<AddPersonnelView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text('Personel Ekle'),
+        elevation: 0,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.brown,
+        title: const Text(
+          'YENİ GARSON KAYDI',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, letterSpacing: 1),
+        ),
+        centerTitle: true,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
         child: Column(
           children: [
-            TextField(
-              controller: _nameController,
-              decoration: const InputDecoration(
-                labelText: 'İsim Soyisim',
-                border: OutlineInputBorder(),
+            // İllüstrasyon veya Dekoratif Alan
+            Container(
+              height: 120,
+              width: 120,
+              decoration: BoxDecoration(
+                color: Colors.brown.shade50,
+                shape: BoxShape.circle,
               ),
-            ),
-            const SizedBox(height: 20),
-            TextField(
-              controller: _usernameController,
-              decoration: const InputDecoration(
-                labelText: 'Kullanıcı Adı',
-                suffixText: '@example.com',
-                border: OutlineInputBorder(),
+              child: const Icon(
+                Icons.person_add_alt_1_rounded,
+                size: 60,
+                color: Colors.brown,
               ),
-            ),
-            const SizedBox(height: 20),
-            TextField(
-              controller: _passwordController,
-              decoration: const InputDecoration(
-                labelText: 'Şifre',
-                border: OutlineInputBorder(),
-              ),
-              obscureText: true,
-            ),
-            const SizedBox(height: 20),
-            DropdownButtonFormField<String>(
-              value: _selectedRole,
-              decoration: const InputDecoration(
-                labelText: 'Rol Seçimi',
-                border: OutlineInputBorder(),
-              ),
-              items: const [
-                DropdownMenuItem(value: 'garson', child: Text('Garson')),
-                DropdownMenuItem(value: 'kasa', child: Text('Kasa')),
-                DropdownMenuItem(value: 'yonetici', child: Text('Yönetici')),
-              ],
-              onChanged: (val) {
-                if (val != null) {
-                  setState(() => _selectedRole = val);
-                }
-              },
             ),
             const SizedBox(height: 30),
-            ElevatedButton(
-              onPressed: _isLoading ? null : _createPersonnel,
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size(double.infinity, 50),
+            const Text(
+              'Personel Bilgileri',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
+                color: Colors.black87,
               ),
-              child: _isLoading 
-                ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : const Text('Hesabı Oluştur', style: TextStyle(fontSize: 16)),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Oluşturulan hesap garson yetkisiyle açılacaktır.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey.shade500,
+              ),
+            ),
+            const SizedBox(height: 40),
+            
+            // İsim Soyisim Field
+            _buildTextField(
+              controller: _nameController,
+              label: 'Adı Soyadı',
+              icon: Icons.badge_outlined,
+              hint: 'Örn: Ahmet Yılmaz',
+            ),
+            const SizedBox(height: 20),
+            
+            // Kullanıcı Adı Field
+            _buildTextField(
+              controller: _usernameController,
+              label: 'Kullanıcı Adı',
+              icon: Icons.alternate_email_rounded,
+            ),
+            const SizedBox(height: 20),
+            
+            // Şifre Field
+            _buildTextField(
+              controller: _passwordController,
+              label: 'Şifre',
+              icon: Icons.lock_open_rounded,
+              hint: 'En az 6 karakter',
+              isPassword: true,
+              isPasswordVisible: _isPasswordVisible,
+              onTogglePassword: () {
+                setState(() => _isPasswordVisible = !_isPasswordVisible);
+              },
+            ),
+            
+            const SizedBox(height: 50),
+            
+            // Kaydet Butonu
+            SizedBox(
+              width: double.infinity,
+              height: 55,
+              child: ElevatedButton(
+                onPressed: _isLoading ? null : _createPersonnel,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.brown,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(15),
+                  ),
+                  elevation: 2,
+                ),
+                child: _isLoading 
+                  ? const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Text(
+                      'HESABI OLUŞTUR',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(
+                'Vazgeç',
+                style: TextStyle(color: Colors.grey.shade600),
+              ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    String? hint,
+    String? suffix,
+    bool isPassword = false,
+    bool isPasswordVisible = false,
+    VoidCallback? onTogglePassword,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 8),
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: Colors.brown,
+            ),
+          ),
+        ),
+        TextField(
+          controller: controller,
+          obscureText: isPassword && !isPasswordVisible,
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
+            prefixIcon: Icon(icon, color: Colors.brown, size: 22),
+            suffixText: suffix,
+            suffixStyle: TextStyle(color: Colors.grey.shade400),
+            suffixIcon: isPassword ? IconButton(
+              icon: Icon(
+                isPasswordVisible ? Icons.visibility : Icons.visibility_off,
+                color: Colors.grey,
+              ),
+              onPressed: onTogglePassword,
+            ) : null,
+            filled: true,
+            fillColor: Colors.grey.shade50,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(15),
+              borderSide: BorderSide.none,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(15),
+              borderSide: BorderSide(color: Colors.grey.shade100),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(15),
+              borderSide: const BorderSide(color: Colors.brown, width: 1.5),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

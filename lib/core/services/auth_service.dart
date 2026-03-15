@@ -5,6 +5,26 @@ import 'supabase_service.dart';
 class AuthService {
   final SupabaseClient _supabase = SupabaseService.instance.client;
 
+  User? get currentUser => _supabase.auth.currentUser;
+
+  bool get isSessionActive => _supabase.auth.currentSession != null;
+
+  Future<Map<String, dynamic>?> getCurrentProfile() async {
+    final user = currentUser;
+    if (user == null) return null;
+    
+    try {
+      final response = await _supabase
+          .from('profiles')
+          .select()
+          .eq('id', user.id)
+          .single();
+      return response;
+    } catch (e) {
+      return null;
+    }
+  }
+
   // Sadece kullanıcı adı ile giriş, arkaplanda @example.com eklenir
   Future<AuthResponse> signIn({
     required String username,

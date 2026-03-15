@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/services/supabase_service.dart';
 
 class TableDetailView extends StatefulWidget {
   final String tableName;
@@ -8,58 +9,65 @@ class TableDetailView extends StatefulWidget {
   State<TableDetailView> createState() => _TableDetailViewState();
 }
 
-class _TableDetailViewState extends State<TableDetailView> {
-  // Örnek Kategori
-  String? _selectedCategory;
+class _TableDetailViewState extends State<TableDetailView> with SingleTickerProviderStateMixin {
+  final _supabase = SupabaseService.instance.client;
+  late TabController _tabController;
+  
+  String? _selectedCategoryId;
+  List<Map<String, dynamic>> _categories = [];
+  List<Map<String, dynamic>> _products = [];
+  Map<String, List<dynamic>> _cart = {}; // {productId: [qty, price, name]}
+  
+  bool _isLoading = true;
+  bool _isSaving = false;
 
-  // Sahte Veriler (İleride Supabase'den gelecek)
-  final categories = ['Sıcak İçecekler', 'Soğuk İçecekler', 'Tatlılar', 'Atıştırmalıklar'];
-  final products = {
-    'Sıcak İçecekler': [
-      {'name': 'Çay', 'price': 15.0},
-      {'name': 'Filtre Kahve', 'price': 60.0},
-      {'name': 'Latte', 'price': 80.0},
-    ],
-    'Soğuk İçecekler': [
-      {'name': 'Limonata', 'price': 50.0},
-      {'name': 'Su', 'price': 10.0},
-      {'name': 'Buzlu Kahve', 'price': 90.0},
-    ]
-  };
-
-  // Sepet: \{Ürün Adı: [Miktar, Fiyat, KaydedilmişMi]\}
-  // KaydedilmişMi = true ise önceden verilmiş aktif sipariş, false ise yeni eklenen
-  final Map<String, List<dynamic>> _cart = {
-    // Örnek olarak önceden sipariş edilmiş bir ürün:
-    'Çay': [2, 15.0, true]
-  };
-
-  void _addToCart(String productName, double price) {
-    setState(() {
-      if (_cart.containsKey(productName)) {
-        _cart[productName]![0] += 1;
-      } else {
-        _cart[productName] = [1, price, false];
-      }
-    });
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    _fetchMenuData();
   }
 
-  void _removeFromCart(String productName) {
+  Future<void> _fetchMenuData() async {
+    setState(() => _isLoading = true);
+    try {
+      final catResponse = await _supabase.from('categories').select().order('name');
+      final prodResponse = await _supabase.from('products').select().eq('is_available', true).order('name');
+
+      setState(() {
+        _categories = List<Map<String, dynamic>>.from(catResponse);
+        _products = List<Map<String, dynamic>>.from(prodResponse);
+        if (_categories.isNotEmpty) {
+          _selectedCategoryId = _categories[0]['id'].toString();
+        }
+      });
+    } catch (e) {
+      debugPrint('Menü çekme hatası: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  void _addToCart(String productId, String name, double price) {
     setState(() {
-      if (_cart.containsKey(productName)) {
-        if (_cart[productName]![0] > 1) {
-          _cart[productName]![0] -= 1;
+      if (_cart.containsKey(productId)) {
+        _cart[productId]![0] += 1;
+      } else {
+        _cart[productId] = [1, price, name];
+      }
+    });
+    // Haptic feedback veya küçük bir snackbar eklenebilir
+  }
+
+  void _removeFromCart(String productId) {
+    setState(() {
+      if (_cart.containsKey(productId)) {
+        if (_cart[productId]![0] > 1) {
+          _cart[productId]![0] -= 1;
         } else {
-          _cart.remove(productName);
+          _cart.remove(productId);
         }
       }
-    });
-  }
-
-  // 6. Madde: Komple silme fonksiyonu (Tek seferde satırı siler)
-  void _deleteItemCompletely(String productName) {
-    setState(() {
-      _cart.remove(productName);
     });
   }
 
@@ -71,182 +79,380 @@ class _TableDetailViewState extends State<TableDetailView> {
     return total;
   }
 
+  Future<void> _submitOrder() async {
+    if (_cart.isEmpty) return;
+    
+    setState(() => _isSaving = true);
+    try {
+      // 1. Masayı bul
+      final tableRes = await _supabase.from('tables').select().eq('name', widget.tableName).single();
+      final tableId = tableRes['id'];
+
+      // 2. Aktif sipariş var mı bak
+      var orderRes = await _supabase
+          .from('orders')
+          .select()
+          .eq('table_id', tableId)
+          .eq('status', 'bekliyor')
+          .maybeSingle();
+
+      String orderId;
+      if (orderRes == null) {
+        // Yeni sipariş oluştur
+        final newOrder = await _supabase.from('orders').insert({
+          'table_id': tableId,
+          'waiter_id': _supabase.auth.currentUser!.id,
+          'total_amount': _totalAmount,
+          'status': 'bekliyor'
+        }).select().single();
+        orderId = newOrder['id'];
+        // Masayı dolu yap
+        await _supabase.from('tables').update({'status': 'occupied'}).eq('id', tableId);
+      } else {
+        orderId = orderRes['id'];
+        // Mevcut sipariş tutarını güncelle
+        await _supabase.from('orders').update({
+          'total_amount': (orderRes['total_amount'] as num) + _totalAmount
+        }).eq('id', orderId);
+      }
+
+      // 3. Sipariş öğelerini ekle
+      List<Map<String, dynamic>> itemsToInsert = [];
+      _cart.forEach((prodId, details) {
+        itemsToInsert.add({
+          'order_id': orderId,
+          'product_id': prodId,
+          'quantity': details[0],
+          'unit_price': details[1],
+        });
+      });
+
+      await _supabase.from('order_items').insert(itemsToInsert);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sipariş başarıyla gönderildi!'), backgroundColor: Colors.green),
+        );
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      debugPrint('Sipariş gönderme hatası: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Hata: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Garsonlar telefon kullanacağı için yatay (Row) değil, Sekmeli (Tab) yapı kullanıyoruz.
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text('Masa ${widget.tableName}'),
-          centerTitle: true,
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'Sipariş Ekle', icon: Icon(Icons.restaurant_menu)),
-              Tab(text: 'Adisyon', icon: Icon(Icons.receipt_long)),
-            ],
-          ),
+    return Scaffold(
+      backgroundColor: Colors.grey.shade50,
+      appBar: AppBar(
+        elevation: 0,
+        backgroundColor: Colors.white,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.black),
+          onPressed: () => Navigator.pop(context),
         ),
-        body: TabBarView(
+        title: Column(
           children: [
-            // SEKME 1: ÜRÜN EKLEME (Telefon uyumlu - tam ekran)
-            Column(
-              children: [
-                // Kategoriler (Yatay Kaydırılabilir)
-                SizedBox(
-                  height: 60,
-                  child: ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: categories.length,
-                    itemBuilder: (context, index) {
-                      final category = categories[index];
-                      final isSelected = _selectedCategory == category;
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 8.0),
-                        child: ChoiceChip(
-                          label: Text(category),
-                          selected: isSelected,
-                          onSelected: (selected) {
-                            setState(() {
-                              _selectedCategory = selected ? category : null;
-                            });
-                          },
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                
-                // Ürünler Grid
-                Expanded(
-                  child: _selectedCategory == null || !products.containsKey(_selectedCategory)
-                      ? const Center(child: Text('Lütfen bir kategori seçin'))
-                      : GridView.builder(
-                          padding: const EdgeInsets.all(8),
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 2, // Telefonda 2 kolon gayet iyi
-                            childAspectRatio: 1.2,
-                            crossAxisSpacing: 8,
-                            mainAxisSpacing: 8,
-                          ),
-                          itemCount: products[_selectedCategory]!.length,
-                          itemBuilder: (context, index) {
-                            final product = products[_selectedCategory]![index];
-                            final name = product['name'] as String;
-                            final price = product['price'] as double;
-
-                            return Card(
-                              elevation: 2,
-                              color: Colors.brown.shade50,
-                              child: InkWell(
-                                onTap: () => _addToCart(name, price),
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                                    const SizedBox(height: 8),
-                                    Text('₺${price.toStringAsFixed(2)}', style: const TextStyle(color: Colors.green, fontSize: 16)),
-                                    const SizedBox(height: 8),
-                                    const Icon(Icons.add_circle, color: Colors.brown, size: 28),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                ),
-              ],
-            ),
-
-            // SEKME 2: ADİSYON VE SEPET
-            Column(
-              children: [
-                Expanded(
-                  child: _cart.isEmpty
-                      ? const Center(child: Text('Ekranda Kayıtlı / Yeni Sipariş Yok'))
-                      : ListView.builder(
-                          itemCount: _cart.keys.length,
-                          itemBuilder: (context, index) {
-                            final productName = _cart.keys.elementAt(index);
-                            final qty = _cart[productName]![0] as int;
-                            final price = _cart[productName]![1] as double;
-                            final isSaved = _cart[productName]![2] as bool; // 6. Madde: Önceden gönderilmiş mi?
-
-                            return Card(
-                              color: isSaved ? Colors.grey.shade100 : Colors.green.shade50,
-                              margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              child: ListTile(
-                                leading: Icon(
-                                  isSaved ? Icons.check_circle : Icons.fiber_new,
-                                  color: isSaved ? Colors.grey : Colors.green,
-                                ),
-                                title: Text(productName, style: const TextStyle(fontWeight: FontWeight.bold)),
-                                subtitle: Text('Birim Fiyat: ₺${price.toStringAsFixed(2)}'),
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    // Adet Düşür
-                                    IconButton(
-                                      icon: const Icon(Icons.remove_circle_outline, color: Colors.orange),
-                                      onPressed: () => _removeFromCart(productName),
-                                    ),
-                                    Text('$qty', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                                    // Adet Artır
-                                    IconButton(
-                                      icon: const Icon(Icons.add_circle_outline, color: Colors.green),
-                                      onPressed: () => _addToCart(productName, price),
-                                    ),
-                                    // Komple Sil
-                                    IconButton(
-                                      icon: const Icon(Icons.delete_forever, color: Colors.red),
-                                      onPressed: () => _deleteItemCompletely(productName),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                ),
-                // Toplam Fiyat ve Kaydet Butonu
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  color: Colors.white,
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Genel Toplam:', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                          Text('₺${_totalAmount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.green)),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 50,
-                        child: ElevatedButton.icon(
-                          onPressed: _cart.isEmpty
-                              ? null
-                              : () {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Siparişler Kaydedildi ve Mutfağa İletildi')),
-                                  );
-                                  Navigator.pop(context);
-                                },
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.brown),
-                          icon: const Icon(Icons.send, color: Colors.white),
-                          label: const Text('Tümünü Kaydet ve Gönder', style: TextStyle(fontSize: 18, color: Colors.white)),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+            Text('MASA ${widget.tableName}', 
+              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 18)),
+            const Text('SİPARİŞ EKRANI', 
+              style: TextStyle(color: Colors.grey, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
+          ],
+        ),
+        centerTitle: true,
+        bottom: TabBar(
+          controller: _tabController,
+          labelColor: Colors.brown,
+          unselectedLabelColor: Colors.grey,
+          indicatorColor: Colors.brown,
+          indicatorWeight: 3,
+          tabs: const [
+            Tab(text: 'MENÜ'),
+            Tab(text: 'SİPARİŞ'),
           ],
         ),
       ),
+      body: _isLoading 
+        ? const Center(child: CircularProgressIndicator(color: Colors.brown))
+        : TabBarView(
+            controller: _tabController,
+            children: [
+              _buildOrderMenu(),
+              _buildCartView(),
+            ],
+          ),
+    );
+  }
+
+  Widget _buildOrderMenu() {
+    if (_categories.isEmpty) return const Center(child: Text('Kategori bulunamadı.'));
+    
+    final filteredProducts = _products.where((p) => p['category_id'].toString() == _selectedCategoryId).toList();
+
+    return Column(
+      children: [
+        // Kategori Listesi
+        Container(
+          height: 70,
+          color: Colors.white,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            itemCount: _categories.length,
+            itemBuilder: (context, index) {
+              final cat = _categories[index];
+              final isSelected = _selectedCategoryId == cat['id'].toString();
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: GestureDetector(
+                  onTap: () => setState(() => _selectedCategoryId = cat['id'].toString()),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    decoration: BoxDecoration(
+                      color: isSelected ? Colors.brown : Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                    child: Center(
+                      child: Text(
+                        cat['name'].toString().toUpperCase(),
+                        style: TextStyle(
+                          color: isSelected ? Colors.white : Colors.black54,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        
+        // Ürün Gridi
+        Expanded(
+          child: filteredProducts.isEmpty
+            ? const Center(child: Text('Bu kategoride ürün bulunmuyor.'))
+            : GridView.builder(
+                padding: const EdgeInsets.all(16),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  childAspectRatio: 0.85,
+                  crossAxisSpacing: 16,
+                  mainAxisSpacing: 16,
+                ),
+                itemCount: filteredProducts.length,
+                itemBuilder: (context, index) {
+                  final p = filteredProducts[index];
+                  final String prodId = p['id'].toString();
+                  final int cartQty = _cart.containsKey(prodId) ? _cart[prodId]![0] : 0;
+
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.04),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        )
+                      ],
+                    ),
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: InkWell(
+                            onTap: () => _addToCart(prodId, p['name'], (p['price'] as num).toDouble()),
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12.0),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const CircleAvatar(
+                                    backgroundColor: Colors.brown,
+                                    radius: 20,
+                                    child: Icon(Icons.flatware, color: Colors.white, size: 18),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    p['name'], 
+                                    textAlign: TextAlign.center,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '₺${p['price']}', 
+                                    style: const TextStyle(color: Colors.brown, fontWeight: FontWeight.w900, fontSize: 16),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (cartQty > 0)
+                          Container(
+                            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.brown.shade50,
+                              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(20)),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                GestureDetector(
+                                  onTap: () => _removeFromCart(prodId),
+                                  child: const Icon(Icons.remove_circle, color: Colors.brown, size: 22),
+                                ),
+                                Text('$cartQty', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.brown)),
+                                GestureDetector(
+                                  onTap: () => _addToCart(prodId, p['name'], (p['price'] as num).toDouble()),
+                                  child: const Icon(Icons.add_circle, color: Colors.brown, size: 22),
+                                ),
+                              ],
+                            ),
+                          )
+                        else
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8.0),
+                            child: ElevatedButton(
+                              onPressed: () => _addToCart(prodId, p['name'], (p['price'] as num).toDouble()),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.brown,
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                padding: EdgeInsets.zero,
+                                minimumSize: const Size(32, 32),
+                              ),
+                              child: const Icon(Icons.add, size: 20),
+                            ),
+                          )
+                      ],
+                    ),
+                  );
+                },
+              ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCartView() {
+    return Column(
+      children: [
+        Expanded(
+          child: _cart.isEmpty
+            ? Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.shopping_basket_outlined, size: 100, color: Colors.grey.shade200),
+                    const SizedBox(height: 16),
+                    const Text('Sepetiniz boş.', style: TextStyle(color: Colors.grey, fontSize: 16)),
+                  ],
+                ),
+              )
+            : ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: _cart.length,
+                itemBuilder: (context, index) {
+                  final id = _cart.keys.elementAt(index);
+                  final item = _cart[id]!;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(15),
+                      boxShadow: [
+                        BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 5, offset: const Offset(0, 2))
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(color: Colors.brown.shade50, borderRadius: BorderRadius.circular(10)),
+                          child: Text('${item[0]}x', style: const TextStyle(color: Colors.brown, fontWeight: FontWeight.bold)),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(item[2], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                              Text('₺${item[1]} / adet', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                        Text('₺${(item[0] * item[1]).toStringAsFixed(2)}', 
+                          style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: Colors.brown)),
+                        const SizedBox(width: 12),
+                        GestureDetector(
+                          onTap: () => setState(() => _cart.remove(id)),
+                          child: const Icon(Icons.delete_outline, color: Colors.red, size: 22),
+                        )
+                      ],
+                    ),
+                  );
+                },
+              ),
+        ),
+        
+        // Alt Panel (Özet ve Onay)
+        Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+            boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 20, offset: const Offset(0, -5))],
+          ),
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('TOPLAM TUTAR', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.grey)),
+                    Text('₺${_totalAmount.toStringAsFixed(2)}', 
+                      style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: Colors.brown)),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  height: 60,
+                  child: ElevatedButton(
+                    onPressed: (_cart.isEmpty || _isSaving) ? null : _submitOrder,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.brown,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                      elevation: 5,
+                      shadowColor: Colors.brown.withOpacity(0.5),
+                    ),
+                    child: _isSaving 
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text('SİPARİŞİ ONAYLA VE GÖNDER', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        )
+      ],
     );
   }
 }

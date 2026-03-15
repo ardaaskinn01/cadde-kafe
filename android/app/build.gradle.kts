@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.caddekafe"
+    namespace = "com.aasoft.caddekafe"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "27.0.12077973"
 

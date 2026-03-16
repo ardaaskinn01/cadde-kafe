@@ -51,8 +51,10 @@ class _ManagerCashierViewState extends State<ManagerCashierView> with SingleTick
       
       for (var table in tables) {
         if (table['orders'] != null) {
-          // Sadece 'bekliyor' olan siparişleri tut, diğerlerini (tamamlanmışları) listeden çıkar
-          table['orders'] = (table['orders'] as List).where((o) => o['status'] == 'bekliyor').toList();
+          // Aktif siparişleri tut
+          table['orders'] = (table['orders'] as List).where((o) => 
+            ['bekliyor', 'hazirlaniyor', 'teslim_edildi'].contains(o['status'])
+          ).toList();
         }
       }
 
@@ -310,7 +312,7 @@ class _ManagerTableDetailViewState extends State<ManagerTableDetailView> {
           .from('orders')
           .select('*, order_items(*, products(name))')
           .eq('table_id', widget.table['id'])
-          .eq('status', 'bekliyor')
+          .inFilter('status', ['bekliyor', 'hazirlaniyor', 'teslim_edildi'])
           .maybeSingle();
       
       if (orderRes != null) {

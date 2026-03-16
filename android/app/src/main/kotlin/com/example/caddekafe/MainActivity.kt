@@ -1,4 +1,4 @@
-package com.example.caddekafe
+package com.aasoft.caddekafe
 
 import io.flutter.embedding.android.FlutterActivity
 

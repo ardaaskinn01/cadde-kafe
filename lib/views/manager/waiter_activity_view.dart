@@ -33,7 +33,11 @@ class _WaiterActivityViewState extends State<WaiterActivityView> {
 
       // 2. Bugünkü siparişleri çek (İstatistikler için)
       final now = DateTime.now();
-      final todayStart = DateTime(now.year, now.month, now.day, 0, 0, 0).toIso8601String();
+      DateTime businessStart = DateTime(now.year, now.month, now.day, 3, 0, 0);
+      if (now.hour < 3) {
+        businessStart = businessStart.subtract(const Duration(days: 1));
+      }
+      final todayStart = businessStart.toIso8601String();
       
       final ordersResponse = await _supabase
           .from('orders')
@@ -51,6 +55,8 @@ class _WaiterActivityViewState extends State<WaiterActivityView> {
         processedData.add({
           'id': waiter['id'],
           'name': waiter['full_name'] ?? 'İsimsiz',
+          'username': waiter['username'] ?? 'Tanımsız',
+          'password': waiter['password'] ?? 'Tanımsız',
           'orderCount': waiterOrders.length,
           'totalSales': totalSales,
         });
@@ -192,17 +198,54 @@ class _WaiterActivityViewState extends State<WaiterActivityView> {
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
                   ),
                   const SizedBox(height: 4),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
-                    onPressed: () => _deleteWaiter(waiter['id'], waiter['name']),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.key_rounded, color: Colors.blue, size: 20),
+                        onPressed: () => _showCredentialsDialog(waiter),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        tooltip: 'Giriş Bilgileri',
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                        onPressed: () => _deleteWaiter(waiter['id'], waiter['name']),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  void _showCredentialsDialog(Map<String, dynamic> waiter) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('${waiter['name']} - Giriş Bilgileri'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Kullanıcı Adı:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
+            Text(waiter['username'], style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            const Text('Şifre:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
+            Text(waiter['password'], style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.brown)),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Kapat')),
+        ],
       ),
     );
   }
@@ -238,7 +281,12 @@ class _WaiterOrdersDetailDialog extends StatelessWidget {
               .from('orders')
               .select('id, table_id, total_amount, created_at, tables(name)')
               .eq('waiter_id', waiterId)
-              .gte('created_at', DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day, 0, 0, 0).toIso8601String())
+              .gte('created_at', (() {
+                final now = DateTime.now();
+                DateTime bStart = DateTime(now.year, now.month, now.day, 3, 0, 0);
+                if (now.hour < 3) bStart = bStart.subtract(const Duration(days: 1));
+                return bStart.toIso8601String();
+              })())
               .order('created_at', ascending: false),
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {

@@ -167,7 +167,7 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
           ],
         ),
         centerTitle: true,
-        bottom: TabBar(
+        bottom: _isDesktop(context) ? null : TabBar(
           controller: _tabController,
           labelColor: Colors.brown,
           unselectedLabelColor: Colors.grey,
@@ -181,14 +181,26 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
       ),
       body: _isLoading 
         ? const Center(child: CircularProgressIndicator(color: Colors.brown))
-        : TabBarView(
-            controller: _tabController,
-            children: [
-              _buildOrderMenu(),
-              _buildCartView(),
-            ],
-          ),
+        : _isDesktop(context)
+            ? Row(
+                children: [
+                  Expanded(flex: 2, child: _buildOrderMenu()),
+                  Container(width: 1, color: Colors.grey.shade300),
+                  Expanded(flex: 1, child: _buildCartView()),
+                ],
+              )
+            : TabBarView(
+                controller: _tabController,
+                children: [
+                  _buildOrderMenu(),
+                  _buildCartView(),
+                ],
+              ),
     );
+  }
+
+  bool _isDesktop(BuildContext context) {
+    return MediaQuery.of(context).size.width > 800;
   }
 
   Widget _buildOrderMenu() {
@@ -243,9 +255,9 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
             ? const Center(child: Text('Bu kategoride ürün bulunmuyor.'))
             : GridView.builder(
                 padding: const EdgeInsets.all(16),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  childAspectRatio: 0.85,
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: _isDesktop(context) ? 4 : 2,
+                  childAspectRatio: _isDesktop(context) ? 0.9 : 0.85,
                   crossAxisSpacing: 16,
                   mainAxisSpacing: 16,
                 ),

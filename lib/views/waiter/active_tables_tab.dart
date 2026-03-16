@@ -27,7 +27,7 @@ class _ActiveTablesTabState extends State<ActiveTablesTab> {
           .from('tables')
           .select('*, orders(id, total_amount, status, order_items(quantity, products(name)))')
           .eq('status', 'occupied')
-          .eq('orders.status', 'bekliyor');
+          .inFilter('orders.status', ['bekliyor', 'hazirlaniyor', 'teslim_edildi']);
       
       final List<Map<String, dynamic>> tables = List<Map<String, dynamic>>.from(response);
       
@@ -143,17 +143,42 @@ class _ActiveTablesTabState extends State<ActiveTablesTab> {
       );
     }
 
+    final bool isDesktop = MediaQuery.of(context).size.width > 800;
+
     return RefreshIndicator(
       onRefresh: _fetchActiveTables,
       color: Colors.brown,
-      child: ListView.builder(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        itemCount: _activeTables.length,
-        itemBuilder: (context, index) {
-          final table = _activeTables[index];
-          final String tableName = table['name'];
-          final orders = table['orders'] as List;
-          final dynamic totalAmount = orders.isNotEmpty ? orders.first['total_amount'] : 0;
+      child: isDesktop
+        ? GridView.builder(
+            padding: const EdgeInsets.all(20),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: MediaQuery.of(context).size.width > 1200 ? 4 : (MediaQuery.of(context).size.width > 900 ? 3 : 2),
+              crossAxisSpacing: 16,
+              mainAxisSpacing: 16,
+              childAspectRatio: 0.8,
+            ),
+            itemCount: _activeTables.length,
+            itemBuilder: (context, index) {
+              return _buildTableCard(_activeTables[index]);
+            },
+          )
+        : ListView.builder(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            itemCount: _activeTables.length,
+            itemBuilder: (context, index) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: _buildTableCard(_activeTables[index]),
+              );
+            },
+          ),
+    );
+  }
+
+  Widget _buildTableCard(Map<String, dynamic> table) {
+    final String tableName = table['name'];
+    final orders = table['orders'] as List;
+    final dynamic totalAmount = orders.isNotEmpty ? orders.first['total_amount'] : 0;
 
           return Container(
             margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
@@ -200,6 +225,18 @@ class _ActiveTablesTabState extends State<ActiveTablesTab> {
                           ),
                         ),
                         const SizedBox(width: 8),
+                        if (orders.isNotEmpty && orders.first['status'] == 'teslim_edildi')
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text(
+                              'HAZIR',
+                              style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 10),
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -268,9 +305,6 @@ class _ActiveTablesTabState extends State<ActiveTablesTab> {
                   ),
               ],
             ),
-          );
-        },
-      ),
     );
   }
 }

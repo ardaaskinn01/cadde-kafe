@@ -73,6 +73,8 @@ class AuthService {
         'id': response.user!.id,
         'full_name': fullName,
         'role': role,
+        'username': sanitizedUsername,
+        'password': password,
       });
       
       // Geçici istemciyi temizle

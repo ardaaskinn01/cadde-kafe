@@ -26,7 +26,11 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
     setState(() => _isLoading = true);
     try {
       final now = DateTime.now();
-      final todayStart = DateTime(now.year, now.month, now.day, 0, 0, 0).toIso8601String();
+      DateTime businessStart = DateTime(now.year, now.month, now.day, 3, 0, 0);
+      if (now.hour < 3) {
+        businessStart = businessStart.subtract(const Duration(days: 1));
+      }
+      final todayStart = businessStart.toIso8601String();
       
       // Siparişleri çek (ilişkili tablo verileriyle birlikte)
       final response = await _supabase

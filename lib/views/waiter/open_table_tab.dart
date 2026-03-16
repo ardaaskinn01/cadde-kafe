@@ -86,11 +86,11 @@ class _OpenTableTabState extends State<OpenTableTab> {
                ? const Center(child: Text('Henüz masa tanımlanmamış.'))
                : GridView.builder(
                   padding: const EdgeInsets.all(20),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: MediaQuery.of(context).size.width > 1200 ? 6 : (MediaQuery.of(context).size.width > 800 ? 5 : 3),
                     crossAxisSpacing: 15,
                     mainAxisSpacing: 15,
-                    childAspectRatio: 1.1,
+                    childAspectRatio: MediaQuery.of(context).size.width > 800 ? 1.5 : 1.1,
                   ),
                   itemCount: sectionTables.length,
                   itemBuilder: (context, index) {

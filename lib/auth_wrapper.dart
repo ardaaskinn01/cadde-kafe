@@ -7,6 +7,7 @@ import 'views/auth/login_view.dart';
 import 'views/manager/manager_home_view.dart';
 import 'views/waiter/waiter_home_view.dart';
 import 'views/cashier/cashier_home_view.dart';
+import 'views/kitchen/kitchen_home_view.dart';
 
 class AuthWrapper extends StatefulWidget {
   const AuthWrapper({Key? key}) : super(key: key);
@@ -60,6 +61,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
             _targetView = const WaiterHomeView();
           } else if (role == 'kasa') {
             _targetView = const CashierHomeView();
+          } else if (role == 'mutfak') {
+            _targetView = const KitchenHomeView();
           } else {
             _targetView = LoginView(errorMessage: 'Bilinmeyen rol: $role. Lütfen yöneticiye danışın.');
           }

@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/services/auth_service.dart';
 import '../../auth_wrapper.dart';
 import '../../core/services/supabase_service.dart';
@@ -13,6 +15,8 @@ class CashierHomeView extends StatefulWidget {
 class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final _supabase = SupabaseService.instance.client;
+  RealtimeChannel? _realtimeChannel;
+  Timer? _refreshTimer;
   
   String? _selectedTableId;
   Map<String, dynamic>? _selectedTableData;
@@ -31,6 +35,54 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _fetchInitialData();
+    _setupRealtime();
+    _startAutoRefresh();
+  }
+
+  @override
+  void dispose() {
+    _realtimeChannel?.unsubscribe();
+    _refreshTimer?.cancel();
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  void _startAutoRefresh() {
+    _refreshTimer = Timer.periodic(const Duration(seconds: 15), (timer) {
+      _fetchInitialData();
+    });
+  }
+
+  void _setupRealtime() {
+    _realtimeChannel = _supabase.channel('public:cashier')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'tables',
+          callback: (payload) => _handleDataChange(),
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'orders',
+          callback: (payload) => _handleDataChange(),
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'order_items',
+          callback: (payload) => _handleDataChange(),
+        )
+        .subscribe();
+  }
+
+  void _handleDataChange() {
+    if (mounted) {
+      _fetchTables();
+      if (_selectedTableData != null) {
+        _fetchOrderDetail(_selectedTableData!);
+      }
+    }
   }
 
   Future<void> _fetchInitialData() async {
@@ -98,7 +150,7 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
           .from('orders')
           .select('*, order_items(*, products(name))')
           .eq('table_id', table['id'])
-          .eq('status', 'bekliyor')
+          .inFilter('status', ['bekliyor', 'hazirlaniyor', 'teslim_edildi'])
           .maybeSingle();
       
       if (orderRes != null) {
@@ -668,10 +720,23 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
           const Spacer(),
           _buildStatHeader('Toplam Masa', _allTables.length.toString(), Colors.blue),
           const SizedBox(width: 30),
-          _buildStatHeader('Açık Adisyon', _allTables.where((t) => t['status'] == 'occupied').length.toString(), Colors.orange),
+          _buildStatHeader('Açık Adisyon', _allTables.where((t) => _isTableOccupied(t)).length.toString(), Colors.orange),
+          const SizedBox(width: 20),
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded, color: Colors.brown),
+            onPressed: _fetchInitialData,
+            tooltip: 'Yenile',
+          ),
         ],
       ),
     );
+  }
+
+  bool _isTableOccupied(Map<String, dynamic> table) {
+    final bool hasOccupiedStatus = table['status'] == 'occupied';
+    final orders = table['orders'] as List? ?? [];
+    final bool hasActiveOrder = orders.any((o) => o['status'] == 'bekliyor');
+    return hasOccupiedStatus || hasActiveOrder;
   }
 
   Widget _buildStatHeader(String label, String value, Color color) {
@@ -713,8 +778,8 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
     );
   }
 
-  Widget _buildTableGrid(String section) {
-    final tables = _allTables.where((t) => (t['name'] as String).startsWith(section)).toList();
+  Widget _buildTableGrid(String section, {List<Map<String, dynamic>>? tableList}) {
+    final tables = tableList ?? _allTables.where((t) => (t['name'] as String).startsWith(section)).toList();
     
     return GridView.builder(
       padding: const EdgeInsets.all(25),
@@ -727,11 +792,13 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
       itemCount: tables.length,
       itemBuilder: (context, index) {
         final table = tables[index];
-        final isOccupied = table['status'] == 'occupied';
-        final isSelected = _selectedTableId == table['id'];
+        final orders = table['orders'] as List? ?? [];
+        final activeOrder = orders.isNotEmpty 
+            ? orders.firstWhere((o) => o['status'] == 'bekliyor', orElse: () => null) 
+            : null;
         
-        final orders = table['orders'] as List;
-        final activeOrder = orders.isNotEmpty ? orders.firstWhere((o) => (o['status'] == 'bekliyor' || o['status'] == null), orElse: () => null) : null;
+        final isOccupied = _isTableOccupied(table);
+        final isSelected = _selectedTableId == table['id'];
 
         return InkWell(
           onTap: () => _fetchOrderDetail(table),
@@ -783,9 +850,20 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
   }
 
   Widget _buildActiveTablesGrid() {
-    final activeTables = _allTables.where((t) => t['status'] == 'occupied').toList();
-    if (activeTables.isEmpty) return const Center(child: Text('Açık adisyon bulunamadı.'));
-    return _buildTableGrid(''); // Empty section filters nothing but we use our filtered list
+    final activeTables = _allTables.where((t) => _isTableOccupied(t)).toList();
+    if (activeTables.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.check_circle_outline_rounded, size: 80, color: Colors.green.shade100),
+            const SizedBox(height: 16),
+            const Text('Şu an açık adisyon bulunmuyor.', style: TextStyle(color: Colors.grey)),
+          ],
+        ),
+      );
+    }
+    return _buildTableGrid('', tableList: activeTables);
   }
 
   Widget _buildRightPanel() {
@@ -844,7 +922,6 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
           const SizedBox(width: 20),
           const Text('Adisyon Detayı', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
           const Spacer(),
-          IconButton(icon: const Icon(Icons.print_rounded), onPressed: () {}),
         ],
       ),
     );

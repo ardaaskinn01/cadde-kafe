@@ -43,6 +43,13 @@ class _HistoryViewState extends State<HistoryView> with SingleTickerProviderStat
     }
   }
 
+  DateTime _getBusinessDate(DateTime date) {
+    if (date.hour < 3) {
+      return date.subtract(const Duration(days: 1));
+    }
+    return date;
+  }
+
   Future<void> _fetchData() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
@@ -52,16 +59,16 @@ class _HistoryViewState extends State<HistoryView> with SingleTickerProviderStat
 
       switch (_tabController.index) {
         case 0: // Günlük
-          start = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, 0, 0, 0);
+          start = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, 3, 0, 0);
           end = start.add(const Duration(days: 1));
           break;
         case 1: // Aylık
-          start = DateTime(_selectedDate.year, _selectedDate.month, 1);
-          end = DateTime(_selectedDate.year, _selectedDate.month + 1, 1);
+          start = DateTime(_selectedDate.year, _selectedDate.month, 1, 3, 0, 0);
+          end = DateTime(_selectedDate.year, _selectedDate.month + 1, 1, 3, 0, 0);
           break;
         case 2: // Yıllık
-          start = DateTime(_selectedDate.year, 1, 1);
-          end = DateTime(_selectedDate.year + 1, 1, 1);
+          start = DateTime(_selectedDate.year, 1, 1, 3, 0, 0);
+          end = DateTime(_selectedDate.year + 1, 1, 1, 3, 0, 0);
           break;
         default:
           start = DateTime.now();

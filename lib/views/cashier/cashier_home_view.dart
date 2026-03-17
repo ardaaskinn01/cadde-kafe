@@ -156,11 +156,101 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
       if (orderRes != null) {
         setState(() {
           _activeOrder = orderRes;
+          if (_activeOrder!['paid_amount'] == null) {
+            _activeOrder!['paid_amount'] = 0.0;
+          }
           _orderItems = List<Map<String, dynamic>>.from(orderRes['order_items']);
         });
       }
     } catch (e) {
       debugPrint('Sipariş detayı hatası: $e');
+    }
+  }
+
+  Future<void> _updateItemQuantity(Map<String, dynamic> item, int newQty) async {
+    if (newQty < 0) return;
+    
+    try {
+      if (newQty <= 0) {
+        // Ürünü aktif adisyondan tamamen çıkar
+        final response = await _supabase.from('order_items').delete().eq('id', item['id']).select();
+        debugPrint('Silme yanıtı: $response');
+      } else {
+        // Adeti güncelle
+        await _supabase.from('order_items').update({'quantity': newQty}).eq('id', item['id']);
+      }
+
+      // Sipariş toplamını yeniden hesapla
+      double newTotal = 0;
+      final currentItems = await _supabase.from('order_items').select().eq('order_id', _activeOrder!['id']);
+      for (var i in currentItems) {
+        newTotal += (i['quantity'] as int) * (i['unit_price'] as num).toDouble();
+      }
+
+      await _supabase.from('orders').update({'total_amount': newTotal}).eq('id', _activeOrder!['id']);
+      
+      // Eğer tüm ürünler silindiyse masayı kapat/iptal et
+      await _checkOrderCompletion();
+
+      // Veriyi tazele
+      if (_selectedTableData != null) {
+        _fetchOrderDetail(_selectedTableData!);
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+    }
+  }
+
+  Future<void> _partialPayment(Map<String, dynamic> item, int payQty) async {
+    try {
+      double paymentAmount = payQty * (item['unit_price'] as num).toDouble();
+      double currentPaid = (_activeOrder!['paid_amount'] as num? ?? 0).toDouble();
+      
+      // Ödenen adeti güncelle (Silme yapmıyoruz!)
+      int currentPaidQty = (item['paid_quantity'] as int? ?? 0);
+      await _supabase.from('order_items').update({
+        'paid_quantity': currentPaidQty + payQty
+      }).eq('id', item['id']);
+
+      // Siparişin toplam ödenen miktarını arttır
+      await _supabase.from('orders').update({
+        'paid_amount': currentPaid + paymentAmount
+      }).eq('id', _activeOrder!['id']);
+
+      // Masa durumunu kontrol et
+      await _checkOrderCompletion();
+      
+      if (_selectedTableData != null) {
+        _fetchOrderDetail(_selectedTableData!);
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+    }
+  }
+
+  Future<void> _checkOrderCompletion() async {
+    // Tüm ürünlerin (quantity == paid_quantity) olup olmadığını kontrol et
+    final allItemsRes = await _supabase.from('order_items').select().eq('order_id', _activeOrder!['id']);
+    final allItems = List<Map<String, dynamic>>.from(allItemsRes);
+    
+    bool isComplete = allItems.isNotEmpty && allItems.every((item) {
+      int q = item['quantity'] ?? 0;
+      int p = item['paid_quantity'] ?? 0;
+      return q <= p;
+    });
+
+    if (isComplete) {
+      double paid = (_activeOrder!['paid_amount'] as num? ?? 0).toDouble();
+      String finalStatus = paid > 0 ? 'odendi' : 'iptal';
+
+      await _supabase.from('orders').update({'status': finalStatus}).eq('id', _activeOrder!['id']);
+      await _supabase.from('tables').update({'status': 'available'}).eq('id', _selectedTableId!);
+      _fetchInitialData();
+      setState(() {
+        _selectedTableId = null;
+        _selectedTableData = null;
+        _activeOrder = null;
+      });
     }
   }
 
@@ -276,6 +366,7 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
                 _buildSidebarButton(Icons.category, 'Kategori Ekle', _showAddCategoryDialog),
                 _buildSidebarButton(Icons.delete_sweep, 'Kategori Sil', _showDeleteCategoryDialog),
                 _buildSidebarButton(Icons.lock, 'Ürün Kilitle', _showLockProductDialog),
+                _buildSidebarButton(Icons.add_to_photos, 'Masa Ekle', _showAddTableDialog),
               ],
             ),
           ),
@@ -704,6 +795,86 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
     ) ?? false;
   }
 
+  void _showAddTableDialog() {
+    String selectedSection = 'A';
+    final numberController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text('Yeni Masa Ekle', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                value: selectedSection,
+                decoration: InputDecoration(
+                  labelText: 'Bölüm',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                items: ['A', 'B'].map((s) => DropdownMenuItem(value: s, child: Text('$s Bölümü'))).toList(),
+                onChanged: (val) => setDialogState(() => selectedSection = val!),
+              ),
+              const SizedBox(height: 15),
+              TextField(
+                controller: numberController,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: 'Masa Numarası',
+                  hintText: 'Örn: 18, 25',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('İptal', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final no = numberController.text.trim();
+                if (no.isEmpty) return;
+                
+                final tableName = '$selectedSection$no';
+                try {
+                  // Mevcut masayı kontrol et (opsiyonel ama iyi olur)
+                  final existing = await _supabase.from('tables').select().eq('name', tableName).maybeSingle();
+                  if (existing != null) {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bu masa zaten mevcut!')));
+                    return;
+                  }
+
+                  await _supabase.from('tables').insert({
+                    'name': tableName,
+                    'status': 'available',
+                    'is_active': true
+                  });
+                  
+                  if (mounted) {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$tableName başarıyla eklendi.')));
+                    _fetchInitialData();
+                  }
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.brown,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              child: const Text('Masayı Oluştur', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildHeader() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
@@ -890,19 +1061,82 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
               Expanded(
                 child: _activeOrder == null
                   ? const Center(child: Text('Bu masa şu an boş.', style: TextStyle(color: Colors.grey)))
-                  : ListView.builder(
-                      padding: const EdgeInsets.all(25),
-                      itemCount: _orderItems.length,
-                      itemBuilder: (context, index) {
-                        final item = _orderItems[index];
-                        final prodName = item['products'] != null ? item['products']['name'] : 'Ürün';
-                        return _buildOrderItem(prodName, item['quantity'], item['unit_price']);
-                      },
-                    ),
+                  : _buildOrderLists(),
               ),
               _buildPaymentFooter(),
             ],
           ),
+    );
+  }
+
+  Widget _buildOrderLists() {
+    List<Widget> unpaidWidgets = [];
+    List<Widget> paidWidgets = [];
+
+    for (var item in _orderItems) {
+      int totalQty = item['quantity'] ?? 0;
+      int paidQty = item['paid_quantity'] ?? 0;
+      int unpaidQty = totalQty - paidQty;
+      final prodName = item['products'] != null ? item['products']['name'] : 'Tanımsız Ürün';
+
+      if (unpaidQty > 0) {
+        unpaidWidgets.add(_buildOrderItem(item, prodName, unpaidQty, false));
+      }
+      if (paidQty > 0) {
+        paidWidgets.add(_buildOrderItem(item, prodName, paidQty, true));
+      }
+    }
+
+    return Column(
+      children: [
+        // SİPARİŞLER (Ödenmemiş)
+        Expanded(
+          flex: 5,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(left: 20, top: 15, bottom: 5),
+                child: Text('AÇIK SİPARİŞLER', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Colors.grey.shade600)),
+              ),
+              Expanded(
+                child: unpaidWidgets.isEmpty 
+                  ? const Center(child: Text('Açık sipariş yok', style: TextStyle(color: Colors.grey, fontSize: 12)))
+                  : ListView(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                      children: unpaidWidgets,
+                    ),
+              ),
+            ],
+          ),
+        ),
+        
+        // ÖDENENLER
+        Container(height: 1, color: Colors.grey.shade200),
+        Expanded(
+          flex: 4,
+          child: Container(
+            color: Colors.grey.shade50,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(left: 20, top: 15, bottom: 5),
+                  child: Text('ÖDENENLER', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Colors.green.shade700)),
+                ),
+                Expanded(
+                  child: paidWidgets.isEmpty
+                    ? Center(child: Text('Ödenmiş sipariş yok', style: TextStyle(color: Colors.grey.shade400, fontSize: 12)))
+                    : ListView(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                        children: paidWidgets,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -927,65 +1161,175 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
     );
   }
 
-  Widget _buildOrderItem(String name, int qty, dynamic price) {
+  Widget _buildOrderItem(Map<String, dynamic> item, String name, int displayQty, bool isPaid) {
+    double price = (item['unit_price'] as num).toDouble();
+    
     return Container(
-      margin: const EdgeInsets.only(bottom: 15),
-      padding: const EdgeInsets.all(15),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(15),
+        color: isPaid ? Colors.green.shade50 : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: isPaid ? Colors.green.shade100 : Colors.grey.shade200),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 4)],
       ),
-      child: Row(
+      child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(color: Colors.brown.shade100, borderRadius: BorderRadius.circular(10)),
-            child: Text('${qty}x', style: const TextStyle(color: Colors.brown, fontWeight: FontWeight.bold)),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(color: isPaid ? Colors.green.shade100 : Colors.brown.shade50, borderRadius: BorderRadius.circular(8)),
+                child: Text('${displayQty}x', style: TextStyle(color: isPaid ? Colors.green.shade800 : Colors.brown, fontWeight: FontWeight.bold, fontSize: 12)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                    Text('₺${price.toStringAsFixed(2)} / adet', style: TextStyle(color: Colors.grey.shade500, fontSize: 11)),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text('₺${(price * displayQty).toStringAsFixed(2)}', style: TextStyle(fontWeight: FontWeight.w900, color: isPaid ? Colors.green.shade700 : Colors.black87, fontSize: 14)),
+                  if (isPaid) 
+                    const Text('ÖDENDİ', style: TextStyle(color: Colors.green, fontSize: 9, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ],
           ),
-          const SizedBox(width: 15),
-          Expanded(child: Text(name, style: const TextStyle(fontWeight: FontWeight.bold))),
-          Text('₺${(price * qty).toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w600)),
+          if (!isPaid) ...[
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                // İptal Butonu (Mistake prevention)
+                _smallActionBtn(Icons.delete_outline, Colors.red, () => _updateItemQuantity(item, (item['quantity'] as int) - 1)),
+                const SizedBox(width: 12),
+                // Ödeme Butonu
+                SizedBox(
+                  height: 30,
+                  child: ElevatedButton.icon(
+                    onPressed: () => _partialPayment(item, 1),
+                    icon: const Icon(Icons.check_circle_outline, size: 14),
+                    label: Text(displayQty == 1 ? 'ÖDE' : '1 ADET ÖDE', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                ),
+              ],
+            )
+          ]
         ],
+      ),
+    );
+  }
+
+  Widget _smallActionBtn(IconData icon, Color color, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(icon, color: color, size: 20),
       ),
     );
   }
 
   Widget _buildPaymentFooter() {
     if (_activeOrder == null) return const SizedBox();
+    double total = (_activeOrder!['total_amount'] as num).toDouble();
+    double paid = (_activeOrder!['paid_amount'] as num? ?? 0).toDouble();
+    double remaining = total - paid;
+    if (remaining < 0) remaining = 0;
+
     return Container(
-      padding: const EdgeInsets.all(30),
+      padding: const EdgeInsets.all(25),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: Colors.grey.shade200)),
+      ),
       child: Column(
         children: [
-          const Divider(),
-          const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text('GENEL TOPLAM', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Colors.grey)),
-              Text(
-                '₺${_activeOrder!['total_amount']}',
-                style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: Colors.green),
+          _footerRow('TOPLAM TUTAR', '₺${total.toStringAsFixed(2)}', Colors.grey, 14),
+          const SizedBox(height: 8),
+          _footerRow('ÖDENEN', '₺${paid.toStringAsFixed(2)}', Colors.blue, 14),
+          const Divider(height: 30),
+          _footerRow('KALAN TUTAR', '₺${remaining.toStringAsFixed(2)}', Colors.green, 24),
+          if (remaining <= 0) ...[
+            const SizedBox(height: 25),
+            SizedBox(
+              width: double.infinity,
+              height: 60,
+              child: ElevatedButton(
+                onPressed: _processPayment,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.brown,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  elevation: 0,
+                ),
+                child: const Text('MASAYI KAPAT', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               ),
-            ],
-          ),
-          const SizedBox(height: 30),
-          SizedBox(
-            width: double.infinity,
-            height: 70,
-            child: ElevatedButton(
-              onPressed: _processPayment,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.brown,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                elevation: 10,
-                shadowColor: Colors.brown.withOpacity(0.5),
-              ),
-              child: const Text('ÖDEMEYİ AL VE MASAYI KAPAT', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _footerRow(String label, String value, Color valueColor, double valueSize) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Colors.grey)),
+        Text(value, style: TextStyle(fontSize: valueSize, fontWeight: FontWeight.w900, color: valueColor)),
+      ],
+    );
+  }
+
+  Future<void> _showPartialTotalPaymentDialog(double remaining) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Kalan Ödeme'),
+        content: Text('Kalan ₺${remaining.toStringAsFixed(2)} tutarın tamamı ödendi mi?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('İptal')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            child: const Text('Evet, Ödendi', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
     );
+
+    if (confirm == true) {
+      // Kalanın hepsini öde ve kapat
+      await _supabase.from('orders').update({
+        'paid_amount': (_activeOrder!['total_amount'] as num).toDouble(),
+        'status': 'odendi'
+      }).eq('id', _activeOrder!['id']);
+      await _supabase.from('tables').update({'status': 'available'}).eq('id', _selectedTableId!);
+      _fetchInitialData();
+      setState(() {
+        _selectedTableId = null;
+        _selectedTableData = null;
+        _activeOrder = null;
+      });
+    }
   }
 }

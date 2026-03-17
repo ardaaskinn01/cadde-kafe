@@ -14,7 +14,7 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
   bool _isLoading = true;
   double _totalRevenue = 0.0;
   int _totalOrders = 0;
-  List<Map<String, dynamic>> _todayOrders = [];
+  List<Map<String, dynamic>> _todayTransactions = [];
 
   @override
   void initState() {
@@ -35,21 +35,48 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
       // Siparişleri çek (ilişkili tablo verileriyle birlikte)
       final response = await _supabase
           .from('orders')
-          .select('*, tables(name), profiles(full_name)')
+          .select('*, tables(name), profiles(full_name), order_items(*, products(name))')
+          .gte('created_at', todayStart)
+          .inFilter('status', ['odendi'])
+          .order('created_at', ascending: false);
+          
+      final expensesResponse = await _supabase
+          .from('expenses')
+          .select('*')
           .gte('created_at', todayStart)
           .order('created_at', ascending: false);
       
       final List<Map<String, dynamic>> orders = List<Map<String, dynamic>>.from(response);
+      final List<Map<String, dynamic>> expenses = List<Map<String, dynamic>>.from(expensesResponse);
 
       double revenue = 0.0;
+      double totalExpense = 0.0;
+      
+      List<Map<String, dynamic>> transactions = [];
+
       for (var order in orders) {
         revenue += (order['total_amount'] ?? 0.0);
+        order['type'] = 'order';
+        transactions.add(order);
       }
+      
+      for (var expense in expenses) {
+        totalExpense += (expense['amount'] ?? 0.0);
+        expense['type'] = 'expense';
+        transactions.add(expense);
+      }
+      
+      // Tarihe göre sırala
+      transactions.sort((a, b) {
+        final dateA = DateTime.parse(a['created_at']);
+        final dateB = DateTime.parse(b['created_at']);
+        return dateB.compareTo(dateA);
+      });
 
       setState(() {
-        _todayOrders = orders;
-        _totalRevenue = revenue;
-        _totalOrders = orders.length;
+        _todayTransactions = transactions;
+        _totalRevenue = revenue - totalExpense;
+        _totalOrders = orders.length; // Toplam işlem sayısı yerine sipariş adedi kalabilir
       });
     } catch (e) {
       debugPrint('Error fetching todays data: $e');
@@ -126,10 +153,11 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
                 ),
 
                 // Sipariş Listesi
-                _todayOrders.isEmpty
+                // Sipariş Listesi
+                _todayTransactions.isEmpty
                     ? const SliverFillRemaining(
                         child: Center(
-                          child: Text('Bugün henüz sipariş alınmadı.'),
+                          child: Text('Bugün henüz işlem yapılmadı.'),
                         ),
                       )
                     : SliverPadding(
@@ -137,10 +165,55 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
                         sliver: SliverList(
                           delegate: SliverChildBuilderDelegate(
                             (context, index) {
-                              final order = _todayOrders[index];
-                              final time = DateTime.parse(order['created_at']).toLocal();
-                              final tableName = order['tables'] != null ? order['tables']['name'] : 'Masa';
-                              final waiterName = order['profiles'] != null ? order['profiles']['full_name'] : 'Bilinmiyor';
+                              final item = _todayTransactions[index];
+                              final isOrder = item['type'] == 'order';
+                              final time = DateTime.parse(item['created_at']).toLocal();
+
+                              if (!isOrder) {
+                                // GİDER ITEM'I
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(15),
+                                    boxShadow: [
+                                      BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4)),
+                                    ],
+                                  ),
+                                  child: ListTile(
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                    leading: Container(
+                                      padding: const EdgeInsets.all(10),
+                                      decoration: BoxDecoration(
+                                        color: Colors.red.shade50,
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: Icon(Icons.money_off, color: Colors.red.shade700),
+                                    ),
+                                    title: Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text('Gider: ${item['description']}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                        Text('-₺${(item['amount'] ?? 0.0).toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.red, fontSize: 16)),
+                                      ],
+                                    ),
+                                    subtitle: Padding(
+                                      padding: const EdgeInsets.only(top: 4),
+                                      child: Row(
+                                        children: [
+                                          Icon(Icons.access_time, size: 14, color: Colors.grey.shade400),
+                                          const SizedBox(width: 4),
+                                          Text(DateFormat('HH:mm').format(time), style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }
+
+                              // SİPARİŞ ITEM'I
+                              final tableName = item['tables'] != null ? item['tables']['name'] : 'Masa';
+                              final waiterName = item['profiles'] != null ? item['profiles']['full_name'] : 'Bilinmiyor';
 
                               return Container(
                                 margin: const EdgeInsets.only(bottom: 12),
@@ -156,6 +229,7 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
                                   ],
                                 ),
                                 child: ListTile(
+                                  onTap: () => _showOrderDetails(context, item),
                                   contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                                   leading: Container(
                                     padding: const EdgeInsets.all(10),
@@ -173,7 +247,7 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
                                         style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                                       ),
                                       Text(
-                                        '₺${(order['total_amount'] ?? 0.0).toStringAsFixed(2)}',
+                                        '+₺${(item['total_amount'] ?? 0.0).toStringAsFixed(2)}',
                                         style: const TextStyle(
                                           fontWeight: FontWeight.w900,
                                           color: Colors.green,
@@ -202,16 +276,135 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
                                       ),
                                     ],
                                   ),
+                                  trailing: const Icon(Icons.chevron_right_rounded, color: Colors.brown),
                                 ),
                               );
                             },
-                            childCount: _todayOrders.length,
+                            childCount: _todayTransactions.length,
                           ),
                         ),
                       ),
                 const SliverToBoxAdapter(child: SizedBox(height: 30)),
               ],
             ),
+    );
+  }
+
+  void _showOrderDetails(BuildContext context, Map<String, dynamic> order) {
+    final items = order['order_items'] as List? ?? [];
+    final time = DateTime.parse(order['created_at']).toLocal();
+    final tableName = order['tables'] != null ? order['tables']['name'] : 'Masa';
+    final waiterName = order['profiles'] != null ? order['profiles']['full_name'] : 'Bilinmiyor';
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.7,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+        ),
+        child: Column(
+          children: [
+            // Handle bar
+            Container(
+              margin: const EdgeInsets.only(top: 12, bottom: 20),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
+            ),
+            
+            // Header
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('$tableName DETAYI', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 20)),
+                        Text('Garson: $waiterName | Saat: ${DateFormat('HH:mm').format(time)}', 
+                          style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () => Navigator.pop(context),
+                  )
+                ],
+              ),
+            ),
+            
+            const Divider(height: 40),
+            
+            // Items List
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                itemCount: items.length,
+                itemBuilder: (context, index) {
+                  final item = items[index];
+                  final productName = item['products'] != null ? item['products']['name'] : 'Ürün';
+                  final qty = item['quantity'] ?? 1;
+                  final price = (item['unit_price'] ?? 0.0).toDouble();
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(15),
+                      border: Border.all(color: Colors.grey.shade100),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(color: Colors.brown.shade50, borderRadius: BorderRadius.circular(10)),
+                          child: Text('${qty}x', style: const TextStyle(color: Colors.brown, fontWeight: FontWeight.bold)),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(child: Text(productName, style: const TextStyle(fontWeight: FontWeight.bold))),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text('₺${(price * qty).toStringAsFixed(2)}', 
+                              style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.brown)),
+                            Text('₺$price / adet', style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+            
+            // Footer
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 20, offset: const Offset(0, -5))],
+              ),
+              child: SafeArea(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('TOPLAM TUTAR', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+                    Text('₺${(order['total_amount'] ?? 0.0).toStringAsFixed(2)}', 
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 24, color: Colors.green)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

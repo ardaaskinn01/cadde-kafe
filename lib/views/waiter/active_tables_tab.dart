@@ -27,7 +27,7 @@ class _ActiveTablesTabState extends State<ActiveTablesTab> {
           .from('tables')
           .select('*, orders(id, total_amount, status, order_items(quantity, products(name)))')
           .eq('status', 'occupied')
-          .inFilter('orders.status', ['bekliyor', 'hazirlaniyor', 'teslim_edildi']);
+          .eq('orders.status', 'bekliyor');
       
       final List<Map<String, dynamic>> tables = List<Map<String, dynamic>>.from(response);
       
@@ -225,18 +225,6 @@ class _ActiveTablesTabState extends State<ActiveTablesTab> {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        if (orders.isNotEmpty && orders.first['status'] == 'teslim_edildi')
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Colors.blue.shade50,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Text(
-                              'HAZIR',
-                              style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 10),
-                            ),
-                          ),
                       ],
                     ),
                   ),

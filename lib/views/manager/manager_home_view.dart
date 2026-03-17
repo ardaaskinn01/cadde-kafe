@@ -58,10 +58,17 @@ class _ManagerHomeViewState extends State<ManagerHomeView> {
           .select('id')
           .eq('status', 'occupied');
       
-      // 2. Günün Cirosu
+      // 2. Günün Siparişleri
       final ordersResponse = await _supabase
           .from('orders')
-          .select('total_amount')
+          .select('total_amount, status')
+          .gte('created_at', todayStart)
+          .inFilter('status', ['odendi']); // Sadece ödenmişleri cirodan sayalım (veya hepsini? Önceden hepsiydi ama ödenenler gelmeli. Veya iptalleri düşebiliriz. Mevcut hali korumak için filtersiz mi çeksek? Biz tüm ciroyu alıyorduk. İptalleri çıkartalım).
+          
+      // 3. Günün Giderleri
+      final expensesResponse = await _supabase
+          .from('expenses')
+          .select('amount')
           .gte('created_at', todayStart);
 
       // 3. Personel Sayısı (Sadece garsonlar)
@@ -75,12 +82,22 @@ class _ManagerHomeViewState extends State<ManagerHomeView> {
       double revenue = 0;
       final List ordersList = ordersResponse as List;
       for (var o in ordersList) {
-        revenue += (o['total_amount'] ?? 0.0);
+        if (o['status'] != 'iptal') { // İptal olanları cirodan saymıyoruz
+          revenue += (o['total_amount'] ?? 0.0);
+        }
       }
+
+      double totalExpense = 0;
+      final List expensesList = expensesResponse as List;
+      for (var e in expensesList) {
+        totalExpense += (e['amount'] ?? 0.0);
+      }
+
+      final double netRevenue = revenue - totalExpense;
 
       setState(() {
         _activeTablesCount = (tablesResponse as List).length.toString();
-        _todayRevenue = '₺${revenue.toStringAsFixed(0)}';
+        _todayRevenue = '₺${netRevenue.toStringAsFixed(0)}';
         _personnelCount = (personnelResponse as List).length.toString();
       });
     } catch (e) {
@@ -129,6 +146,12 @@ class _ManagerHomeViewState extends State<ManagerHomeView> {
             tooltip: 'Çıkış Yap',
           ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => _showAddExpenseDialog(context),
+        backgroundColor: Colors.red.shade700,
+        child: const Icon(Icons.add, color: Colors.white),
+        tooltip: 'Gider Ekle',
       ),
       body: CustomScrollView(
         slivers: [
@@ -362,6 +385,69 @@ class _ManagerHomeViewState extends State<ManagerHomeView> {
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Çıkış Yap', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddExpenseDialog(BuildContext context) {
+    final TextEditingController descController = TextEditingController();
+    final TextEditingController amountController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Gider Ekle', style: TextStyle(fontWeight: FontWeight.bold)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: descController,
+              decoration: const InputDecoration(labelText: 'Açıklama (Örn: Manav, Temizlik)'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: amountController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Miktar (₺)', prefixText: '₺ '),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('İptal')),
+          ElevatedButton(
+            onPressed: () async {
+              if (descController.text.trim().isEmpty || amountController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lütfen tüm alanları doldurun.')));
+                return;
+              }
+              final amount = double.tryParse(amountController.text.replaceAll(',', '.'));
+              if (amount == null || amount <= 0) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Geçerli bir miktar girin.')));
+                return;
+              }
+
+              Navigator.pop(context); // Dialogu kapat
+
+              // Veritabanına kaydet
+              try {
+                await _supabase.from('expenses').insert({
+                  'description': descController.text.trim(),
+                  'amount': amount,
+                });
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Gider başarıyla eklendi', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green));
+                }
+                _loadStats(); // Ana sayfayı güncelle
+              } catch (e) {
+                debugPrint('Gider ekleme hatası: $e');
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Gider eklenirken hata: $e')));
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700, foregroundColor: Colors.white),
+            child: const Text('Gideri Ekle'),
           ),
         ],
       ),

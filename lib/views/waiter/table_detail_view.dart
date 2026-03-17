@@ -35,11 +35,12 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
       final prodResponse = await _supabase.from('products').select().eq('is_available', true).order('name');
 
       setState(() {
-        _categories = List<Map<String, dynamic>>.from(catResponse);
+        _categories = [
+          {'id': 'v_quick_add', 'name': 'HIZLI EKLE'}, // Sanal Kategori
+          ...List<Map<String, dynamic>>.from(catResponse)
+        ];
         _products = List<Map<String, dynamic>>.from(prodResponse);
-        if (_categories.isNotEmpty) {
-          _selectedCategoryId = _categories[0]['id'].toString();
-        }
+        _selectedCategoryId = 'v_quick_add';
       });
     } catch (e) {
       debugPrint('Menü çekme hatası: $e');
@@ -115,19 +116,56 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
           'total_amount': (orderRes['total_amount'] as num) + _totalAmount
         }).eq('id', orderId);
       }
-
+ 
       // 3. Sipariş öğelerini ekle
+      // Var olan ürünleri çektik ki mükerrer kayıt (çakışma) oluşmasın ve adetler düzgün artsın
+      final existingItemsRes = await _supabase.from('order_items').select().eq('order_id', orderId);
+      final List<Map<String, dynamic>> existingItems = List<Map<String, dynamic>>.from(existingItemsRes);
+      
       List<Map<String, dynamic>> itemsToInsert = [];
-      _cart.forEach((prodId, details) {
-        itemsToInsert.add({
-          'order_id': orderId,
-          'product_id': prodId,
-          'quantity': details[0],
-          'unit_price': details[1],
-        });
-      });
+      
+      for (var entry in _cart.entries) {
+        final prodId = entry.key;
+        final details = entry.value;
+        final qty = details[0] as int;
+        final price = details[1];
+        
+        final existingMatch = existingItems.where((i) => i['product_id'] == prodId).toList();
+        
+        if (existingMatch.isNotEmpty) {
+           // Ürün masada zaten var, adetini güncelle
+           final itemToUpdate = existingMatch.first;
+           final newQty = (itemToUpdate['quantity'] as int) + qty;
+           await _supabase.from('order_items').update({'quantity': newQty}).eq('id', itemToUpdate['id']);
+        } else {
+           // Yeni eklenecek ürün
+           itemsToInsert.add({
+             'order_id': orderId,
+             'product_id': prodId,
+             'quantity': qty,
+             'unit_price': price,
+           });
+        }
+      }
+ 
+      if (itemsToInsert.isNotEmpty) {
+        await _supabase.from('order_items').insert(itemsToInsert);
+      }
 
-      await _supabase.from('order_items').insert(itemsToInsert);
+      // 4. Ürün satış sayılarını güncelle
+      for (var prodId in _cart.keys) {
+        final qty = _cart[prodId]![0];
+        try {
+          // Mevcut sayıyı çek ve arttır (Daha güvenli yol RPC'dir ancak hızlı çözüm budur)
+          final prodRes = await _supabase.from('products').select('sales_count').eq('id', prodId).single();
+          final currentCount = (prodRes['sales_count'] as int? ?? 0);
+          await _supabase.from('products').update({
+            'sales_count': currentCount + qty
+          }).eq('id', prodId);
+        } catch (e) {
+          debugPrint('Satış sayısı güncellenemedi: $prodId');
+        }
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -204,9 +242,13 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
   }
 
   Widget _buildOrderMenu() {
-    if (_categories.isEmpty) return const Center(child: Text('Kategori bulunamadı.'));
-    
-    final filteredProducts = _products.where((p) => p['category_id'].toString() == _selectedCategoryId).toList();
+    final List<Map<String, dynamic>> filteredProducts;
+    if (_selectedCategoryId == 'v_quick_add') {
+      // is_quick_add değeri true olanları filtrele
+      filteredProducts = _products.where((p) => p['is_quick_add'] == true).toList();
+    } else {
+      filteredProducts = _products.where((p) => p['category_id'].toString() == _selectedCategoryId).toList();
+    }
 
     return Column(
       children: [

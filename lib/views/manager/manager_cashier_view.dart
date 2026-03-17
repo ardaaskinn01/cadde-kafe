@@ -51,10 +51,8 @@ class _ManagerCashierViewState extends State<ManagerCashierView> with SingleTick
       
       for (var table in tables) {
         if (table['orders'] != null) {
-          // Aktif siparişleri tut
-          table['orders'] = (table['orders'] as List).where((o) => 
-            ['bekliyor', 'hazirlaniyor', 'teslim_edildi'].contains(o['status'])
-          ).toList();
+          // Sadece 'bekliyor' olan siparişleri tut, diğerlerini (tamamlanmışları) listeden çıkar
+          table['orders'] = (table['orders'] as List).where((o) => o['status'] == 'bekliyor').toList();
         }
       }
 
@@ -260,7 +258,10 @@ class _ManagerCashierViewState extends State<ManagerCashierView> with SingleTick
                   padding: const EdgeInsets.all(20),
                   child: Text('HIZLI İŞLEMLER', style: TextStyle(color: Colors.grey.shade500, fontWeight: FontWeight.bold, fontSize: 12)),
                 ),
-                _buildDrawerItem(Icons.add_box_rounded, 'Yeni Masa Ekle', () => Navigator.pop(context)),
+                _buildDrawerItem(Icons.add_box_rounded, 'Yeni Masa Ekle', () {
+                  Navigator.pop(context); // Drawer kapat
+                  _showAddTableDialog();
+                }),
                 _buildDrawerItem(Icons.lock_clock_rounded, 'Gün Kapat', () => Navigator.pop(context)),
               ],
             ),
@@ -275,6 +276,85 @@ class _ManagerCashierViewState extends State<ManagerCashierView> with SingleTick
       leading: Icon(icon, color: Colors.brown),
       title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
       onTap: onTap,
+    );
+  }
+
+  void _showAddTableDialog() {
+    String selectedSection = 'A';
+    final numberController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text('Yeni Masa Ekle', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                value: selectedSection,
+                decoration: InputDecoration(
+                  labelText: 'Bölüm',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                items: ['A', 'B'].map((s) => DropdownMenuItem(value: s, child: Text('$s Bölümü'))).toList(),
+                onChanged: (val) => setDialogState(() => selectedSection = val!),
+              ),
+              const SizedBox(height: 15),
+              TextField(
+                controller: numberController,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: 'Masa Numarası',
+                  hintText: 'Örn: 18, 25',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('İptal', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final no = numberController.text.trim();
+                if (no.isEmpty) return;
+                
+                final tableName = '$selectedSection$no';
+                try {
+                  final existing = await _supabase.from('tables').select().eq('name', tableName).maybeSingle();
+                  if (existing != null) {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bu masa zaten mevcut!')));
+                    return;
+                  }
+
+                  await _supabase.from('tables').insert({
+                    'name': tableName,
+                    'status': 'available',
+                    'is_active': true
+                  });
+                  
+                  if (mounted) {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$tableName başarıyla eklendi.')));
+                    _fetchTables();
+                  }
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.brown,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              child: const Text('Masayı Oluştur', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -312,7 +392,7 @@ class _ManagerTableDetailViewState extends State<ManagerTableDetailView> {
           .from('orders')
           .select('*, order_items(*, products(name))')
           .eq('table_id', widget.table['id'])
-          .inFilter('status', ['bekliyor', 'hazirlaniyor', 'teslim_edildi'])
+          .eq('status', 'bekliyor')
           .maybeSingle();
       
       if (orderRes != null) {

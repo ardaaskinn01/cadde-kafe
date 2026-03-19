@@ -14,6 +14,7 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
   late TabController _tabController;
   
   String? _selectedCategoryId;
+  String _searchQuery = '';
   List<Map<String, dynamic>> _categories = [];
   List<Map<String, dynamic>> _products = [];
   Map<String, List<dynamic>> _cart = {}; // {productId: [qty, price, name]}
@@ -50,6 +51,12 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
   }
 
   void _addToCart(String productId, String name, double price) {
+    if (price <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sıfır fiyatlı ürünü masaya ekleyemezsiniz. Lütfen fiyat belirlenmesi için kasaya başvurunuz.')),
+      );
+      return;
+    }
     setState(() {
       if (_cart.containsKey(productId)) {
         _cart[productId]![0] += 1;
@@ -89,17 +96,20 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
       final tableRes = await _supabase.from('tables').select().eq('name', widget.tableName).single();
       final tableId = tableRes['id'];
 
-      // 2. Aktif sipariş var mı bak
+      // 2. Aktif sipariş var mı bak (Sadece bekliyor değil; teslim_edildi de aktif sayılır)
       var orderRes = await _supabase
           .from('orders')
           .select()
           .eq('table_id', tableId)
-          .eq('status', 'bekliyor')
-          .maybeSingle();
+          .inFilter('status', ['bekliyor', 'teslim_edildi'])
+          .order('created_at', ascending: false)
+          .limit(1);
 
+      final List orderList = orderRes as List;
       String orderId;
-      if (orderRes == null) {
-        // Yeni sipariş oluştur
+      
+      if (orderList.isEmpty) {
+        // Hiç aktif sipariş yoksa yeni sipariş oluştur
         final newOrder = await _supabase.from('orders').insert({
           'table_id': tableId,
           'waiter_id': _supabase.auth.currentUser!.id,
@@ -110,10 +120,14 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
         // Masayı dolu yap
         await _supabase.from('tables').update({'status': 'occupied'}).eq('id', tableId);
       } else {
-        orderId = orderRes['id'];
-        // Mevcut sipariş tutarını güncelle
+        // Aktif sipariş bulundu, ona ekleme yapacağız
+        final existingOrder = orderList.first;
+        orderId = existingOrder['id'];
+        
+        // Mevcut sipariş tutarını güncelle ve durumu tekrar 'bekliyor' yap ki mutfak yeni ürünleri görsün
         await _supabase.from('orders').update({
-          'total_amount': (orderRes['total_amount'] as num) + _totalAmount
+          'total_amount': (existingOrder['total_amount'] as num) + _totalAmount,
+          'status': 'bekliyor'
         }).eq('id', orderId);
       }
  
@@ -242,8 +256,10 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
   }
 
   Widget _buildOrderMenu() {
-    final List<Map<String, dynamic>> filteredProducts;
-    if (_selectedCategoryId == 'v_quick_add') {
+    List<Map<String, dynamic>> filteredProducts;
+    if (_searchQuery.isNotEmpty) {
+      filteredProducts = _products.where((p) => p['name'].toString().toLowerCase().contains(_searchQuery.toLowerCase())).toList();
+    } else if (_selectedCategoryId == 'v_quick_add') {
       // is_quick_add değeri true olanları filtrele
       filteredProducts = _products.where((p) => p['is_quick_add'] == true).toList();
     } else {
@@ -252,10 +268,41 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
 
     return Column(
       children: [
+        // Arama Çubuğu
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: TextField(
+            decoration: InputDecoration(
+              hintText: 'Ürün Ara...',
+              prefixIcon: const Icon(Icons.search, color: Colors.brown),
+              filled: true,
+              fillColor: Colors.white,
+              contentPadding: const EdgeInsets.symmetric(vertical: 0),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(15),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(15),
+                borderSide: BorderSide(color: Colors.grey.shade200),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(15),
+                borderSide: const BorderSide(color: Colors.brown),
+              ),
+            ),
+            onChanged: (value) {
+              setState(() {
+                _searchQuery = value.trim();
+              });
+            },
+          ),
+        ),
         // Kategori Listesi
-        Container(
-          height: 70,
-          color: Colors.white,
+        if (_searchQuery.isEmpty)
+          Container(
+            height: 70,
+            color: Colors.white,
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -299,7 +346,7 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
                 padding: const EdgeInsets.all(16),
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: _isDesktop(context) ? 4 : 2,
-                  childAspectRatio: _isDesktop(context) ? 0.9 : 0.85,
+                  childAspectRatio: _isDesktop(context) ? 1.4 : 1.3,
                   crossAxisSpacing: 16,
                   mainAxisSpacing: 16,
                 ),
@@ -332,12 +379,6 @@ class _TableDetailViewState extends State<TableDetailView> with SingleTickerProv
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  const CircleAvatar(
-                                    backgroundColor: Colors.brown,
-                                    radius: 20,
-                                    child: Icon(Icons.flatware, color: Colors.white, size: 18),
-                                  ),
-                                  const SizedBox(height: 12),
                                   Text(
                                     p['name'], 
                                     textAlign: TextAlign.center,

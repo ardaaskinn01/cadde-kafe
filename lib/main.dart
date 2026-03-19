@@ -1,14 +1,20 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'core/services/supabase_service.dart';
 import 'auth_wrapper.dart';
+import 'views/customer/customer_menu_view.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // .env dosyasını yükle
-  await dotenv.load(fileName: ".env");
+  // .env dosyasını yüklemeyi dene (Web ortamlarında dosya bulunamayabilir, try/catch önemli)
+  try {
+    await dotenv.load(fileName: ".env");
+  } catch (e) {
+    debugPrint('.env dosyasi bulunamadi, sabit degerler kullanilacak.');
+  }
   
   // Supabase bağlantısını başlat
   await SupabaseService.instance.initialize();
@@ -41,7 +47,8 @@ class MyApp extends StatelessWidget {
           fillColor: Colors.grey.shade100,
         ),
       ),
-      home: const AuthWrapper(),
+      // Web'de doğrudan müşteri menüsü, mobilde giriş ekranı
+      home: kIsWeb ? const CustomerMenuView() : const AuthWrapper(),
     );
   }
 }

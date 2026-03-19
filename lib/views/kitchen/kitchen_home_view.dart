@@ -67,12 +67,12 @@ class _KitchenHomeViewState extends State<KitchenHomeView> {
 
   Future<void> _fetchOrders() async {
     try {
-      // Yalnızca durumu 'bekliyor' (yeni) veya 'hazirlaniyor' olan, 
+      // Yalnızca durumu 'bekliyor' (yeni) olan, 
       // aktif/dolu olan masalara ait siparişleri çeker.
       final response = await _supabase
           .from('orders')
           .select('*, tables(name, status), order_items(quantity, notes, products(name, category_id))')
-          .inFilter('status', ['bekliyor', 'hazirlaniyor'])
+          .inFilter('status', ['bekliyor'])
           .order('created_at', ascending: false); // En yeni sipariş en başta görünür.
           
       final List<Map<String, dynamic>> orders = List<Map<String, dynamic>>.from(response);

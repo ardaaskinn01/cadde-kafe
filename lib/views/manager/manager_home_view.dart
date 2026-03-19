@@ -50,7 +50,11 @@ class _ManagerHomeViewState extends State<ManagerHomeView> {
   Future<void> _loadStats() async {
     try {
       final now = DateTime.now();
-      final todayStart = DateTime(now.year, now.month, now.day).toIso8601String();
+      DateTime businessStart = DateTime(now.year, now.month, now.day, 3, 0, 0);
+      if (now.hour < 3) {
+        businessStart = businessStart.subtract(const Duration(days: 1));
+      }
+      final todayStart = businessStart.toIso8601String();
 
       // 1. Aktif Masalar (Occupied olanlar)
       final tablesResponse = await _supabase

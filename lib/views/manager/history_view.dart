@@ -31,6 +31,7 @@ class _HistoryViewState extends State<HistoryView> with SingleTickerProviderStat
   @override
   void initState() {
     super.initState();
+    _selectedDate = _getBusinessDate(DateTime.now());
     // Haftalık kaldırıldığı için 3 sekmeye düşürüyoruz
     _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(_handleTabSelection);

@@ -150,16 +150,19 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
           .from('orders')
           .select('*, order_items(*, products(name))')
           .eq('table_id', table['id'])
-          .inFilter('status', ['bekliyor', 'hazirlaniyor', 'teslim_edildi'])
-          .maybeSingle();
+          .inFilter('status', ['bekliyor', 'teslim_edildi'])
+          .order('created_at', ascending: false)
+          .limit(1);
       
-      if (orderRes != null) {
+      final List orderList = orderRes as List;
+      if (orderList.isNotEmpty) {
+        final order = Map<String, dynamic>.from(orderList.first);
         setState(() {
-          _activeOrder = orderRes;
+          _activeOrder = order;
           if (_activeOrder!['paid_amount'] == null) {
             _activeOrder!['paid_amount'] = 0.0;
           }
-          _orderItems = List<Map<String, dynamic>>.from(orderRes['order_items']);
+          _orderItems = List<Map<String, dynamic>>.from(order['order_items']);
         });
       }
     } catch (e) {
@@ -1060,7 +1063,28 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
               _buildRightPanelHeader(),
               Expanded(
                 child: _activeOrder == null
-                  ? const Center(child: Text('Bu masa şu an boş.', style: TextStyle(color: Colors.grey)))
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.table_restaurant, size: 60, color: Colors.grey),
+                          const SizedBox(height: 16),
+                          const Text('Bu masa şu an boş.', style: TextStyle(color: Colors.grey, fontSize: 16)),
+                          const SizedBox(height: 24),
+                          ElevatedButton.icon(
+                            onPressed: _showAddItemsToOrderDialog,
+                            icon: const Icon(Icons.add_circle_outline, size: 20),
+                            label: const Text('Masayı Aç / Sipariş Gir', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.brown,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
                   : _buildOrderLists(),
               ),
               _buildPaymentFooter(),
@@ -1096,8 +1120,28 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.only(left: 20, top: 15, bottom: 5),
-                child: Text('AÇIK SİPARİŞLER', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Colors.grey.shade600)),
+                padding: const EdgeInsets.only(left: 20, top: 15, bottom: 5, right: 20),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('AÇIK SİPARİŞLER', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Colors.grey.shade600)),
+                    InkWell(
+                      onTap: _showAddItemsToOrderDialog,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(color: Colors.brown, borderRadius: BorderRadius.circular(8)),
+                        child: const Row(
+                          children: [
+                            Icon(Icons.add, size: 14, color: Colors.white),
+                            SizedBox(width: 4),
+                            Text('Eksik Gir', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
               Expanded(
                 child: unpaidWidgets.isEmpty 
@@ -1330,6 +1374,278 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
         _selectedTableData = null;
         _activeOrder = null;
       });
+    }
+  }
+
+  void _showAddItemsToOrderDialog() {
+    if (_selectedTableData == null) return;
+    
+    Map<String, int> cart = {};
+    String searchQuery = '';
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          int totalItems = cart.values.fold(0, (sum, val) => sum + val);
+
+          Widget buildProductCard(Map<String, dynamic> prod) {
+            final String prodId = prod['id'].toString();
+            final int qty = cart[prodId] ?? 0;
+            
+            return Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: qty > 0 ? Colors.orange.shade50 : Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(color: qty > 0 ? Colors.orange.shade200 : Colors.grey.shade200),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                   Text(prod['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13), textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis),
+                   const SizedBox(height: 4),
+                   Text('₺${prod['price']}', style: TextStyle(color: Colors.grey.shade600, fontSize: 11)),
+                   const SizedBox(height: 8),
+                   Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        InkWell(
+                          onTap: () {
+                            if (qty > 0) {
+                              setDialogState(() {
+                                cart[prodId] = qty - 1;
+                                if (cart[prodId] == 0) cart.remove(prodId);
+                              });
+                            }
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(color: Colors.white, shape: BoxShape.circle, border: Border.all(color: Colors.grey.shade300)),
+                            child: const Icon(Icons.remove, size: 16, color: Colors.brown),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(qty.toString(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        const SizedBox(width: 12),
+                        InkWell(
+                          onTap: () {
+                            if ((prod['price'] as num) <= 0) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Sıfır fiyatlı ürünü masaya ekleyemezsiniz. Lütfen önce menüden fiyatını güncelleyin.')),
+                              );
+                              return;
+                            }
+                            setDialogState(() {
+                              cart[prodId] = qty + 1;
+                            });
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: const BoxDecoration(color: Colors.brown, shape: BoxShape.circle),
+                            child: const Icon(Icons.add, size: 16, color: Colors.white),
+                          ),
+                        ),
+                      ],
+                   ),
+                ],
+              ),
+            );
+          }
+          
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(_activeOrder == null ? 'Yeni Adisyon Aç' : 'Eksik Ürün Ekle', style: const TextStyle(fontWeight: FontWeight.bold)),
+                if (totalItems > 0)
+                   Text('$totalItems Ürün', style: const TextStyle(fontSize: 14, color: Colors.orange, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: SizedBox(
+               width: 900,
+               height: 600,
+               child: _categories.isEmpty 
+                  ? const Center(child: CircularProgressIndicator())
+                  : Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: TextField(
+                            decoration: InputDecoration(
+                              hintText: 'Ürün Ara...',
+                              prefixIcon: const Icon(Icons.search, color: Colors.brown),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                borderSide: BorderSide.none,
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                borderSide: BorderSide(color: Colors.grey.shade200),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                borderSide: const BorderSide(color: Colors.brown),
+                              ),
+                              filled: true,
+                              fillColor: Colors.grey.shade50,
+                              contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                            ),
+                            onChanged: (val) {
+                              setDialogState(() {
+                                searchQuery = val.trim();
+                              });
+                            },
+                          ),
+                        ),
+                        Expanded(
+                          child: searchQuery.isNotEmpty
+                            ? GridView.builder(
+                                padding: const EdgeInsets.all(10),
+                                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 3,
+                                  childAspectRatio: 2.2,
+                                  crossAxisSpacing: 15,
+                                  mainAxisSpacing: 15,
+                                ),
+                                itemCount: _products.where((p) => p['name'].toString().toLowerCase().contains(searchQuery.toLowerCase()) && p['is_available'] != false).length,
+                                itemBuilder: (context, index) {
+                                  final searchProds = _products.where((p) => p['name'].toString().toLowerCase().contains(searchQuery.toLowerCase()) && p['is_available'] != false).toList();
+                                  return buildProductCard(searchProds[index]);
+                                }
+                              )
+                            : DefaultTabController(
+                                length: _categories.length,
+                                child: Column(
+                                  children: [
+                                    TabBar(
+                                      isScrollable: true,
+                                      labelColor: Colors.brown,
+                                      indicatorColor: Colors.brown,
+                                      tabs: _categories.map((c) => Tab(text: c['name'].toString().toUpperCase())).toList(),
+                                    ),
+                                    const SizedBox(height: 15),
+                                    Expanded(
+                                      child: TabBarView(
+                                        children: _categories.map((cat) {
+                                          final catProds = _products.where((p) => p['category_id'] == cat['id'] && p['is_available'] != false).toList();
+                                          return GridView.builder(
+                                            padding: const EdgeInsets.all(10),
+                                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                              crossAxisCount: 3,
+                                              childAspectRatio: 2.2,
+                                              crossAxisSpacing: 15,
+                                              mainAxisSpacing: 15,
+                                            ),
+                                            itemCount: catProds.length,
+                                            itemBuilder: (context, index) {
+                                              return buildProductCard(catProds[index]);
+                                            },
+                                          );
+                                        }).toList(),
+                                      ),
+                                    ),
+                                  ]
+                                )
+                              )
+                        )
+                      ]
+                    )
+            ),
+            actions: [
+               TextButton(onPressed: () => Navigator.pop(context), child: const Text('İptal', style: TextStyle(color: Colors.grey))),
+               ElevatedButton(
+                  onPressed: cart.isEmpty ? null : () {
+                    Navigator.pop(context);
+                    _addItemsToOrder(cart);
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.brown, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                  child: const Text('Ürünleri Ekle', style: TextStyle(color: Colors.white)),
+               )
+            ]
+          );
+        }
+      )
+    );
+  }
+
+  Future<void> _addItemsToOrder(Map<String, int> cart) async {
+    if (_selectedTableData == null) return;
+    
+    setState(() => _isLoading = true);
+    
+    try {
+      final user = _supabase.auth.currentUser;
+      final waiterId = user?.id;
+      
+      String orderId;
+      double currentOrderTotal = 0.0;
+      
+      if (_activeOrder == null) {
+        // Yeni Sipariş Aç (Kasa kendisi masa açıyor)
+        final newOrder = await _supabase.from('orders').insert({
+          'table_id': _selectedTableData!['id'],
+          'waiter_id': waiterId,
+          'total_amount': 0.0,
+          'status': 'bekliyor'
+        }).select().single();
+        orderId = newOrder['id'];
+        
+        await _supabase.from('tables').update({'status': 'occupied'}).eq('id', _selectedTableData!['id']);
+      } else {
+        // Mevcut siparişe ekle
+        orderId = _activeOrder!['id'];
+        currentOrderTotal = (_activeOrder!['total_amount'] as num).toDouble();
+      }
+        
+      double additionalAmount = 0;
+      
+      for(var entry in cart.entries) {
+         final prodId = entry.key;
+         final qty = entry.value;
+         
+         final prod = _products.firstWhere((p) => p['id'].toString() == prodId);
+         final double unitPrice = (prod['price'] as num).toDouble();
+         
+         final existingItemRes = await _supabase.from('order_items')
+            .select()
+            .eq('order_id', orderId)
+            .eq('product_id', prodId)
+            .maybeSingle();
+            
+         if (existingItemRes != null) {
+            final int currentQty = existingItemRes['quantity'] ?? 0;
+            await _supabase.from('order_items').update({'quantity': currentQty + qty}).eq('id', existingItemRes['id']);
+         } else {
+            await _supabase.from('order_items').insert({
+               'order_id': orderId,
+               'product_id': prodId,
+               'quantity': qty,
+               'unit_price': unitPrice,
+            });
+         }
+         additionalAmount += (unitPrice * qty);
+      }
+      
+      final double newTotal = currentOrderTotal + additionalAmount;
+      
+      await _supabase.from('orders').update({
+        'total_amount': newTotal,
+        'status': 'bekliyor',
+        if (waiterId != null) 'waiter_id': waiterId
+      }).eq('id', orderId);
+      
+      await _fetchInitialData();
+      if (_selectedTableData != null) {
+         _fetchOrderDetail(_selectedTableData!);
+      }
+      
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Eksik ürünler başarıyla eklendi.')));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+    } finally {
+      setState(() => _isLoading = false);
     }
   }
 }

@@ -22,7 +22,7 @@ class _ManagerHomeViewState extends State<ManagerHomeView> {
   
   String _managerName = "Yönetici";
   String _activeTablesCount = "-";
-  String _todayRevenue = "-";
+  String _kasaAmount = "-";
   String _personnelCount = "-";
 
   @override
@@ -49,59 +49,82 @@ class _ManagerHomeViewState extends State<ManagerHomeView> {
 
   Future<void> _loadStats() async {
     try {
-      final now = DateTime.now();
-      DateTime businessStart = DateTime(now.year, now.month, now.day, 3, 0, 0);
-      if (now.hour < 3) {
-        businessStart = businessStart.subtract(const Duration(days: 1));
-      }
-      final todayStart = businessStart.toIso8601String();
-
       // 1. Aktif Masalar (Occupied olanlar)
       final tablesResponse = await _supabase
           .from('tables')
           .select('id')
           .eq('status', 'occupied');
       
-      // 2. Günün Siparişleri
-      final ordersResponse = await _supabase
-          .from('orders')
-          .select('total_amount, status')
-          .gte('created_at', todayStart)
-          .inFilter('status', ['odendi']); // Sadece ödenmişleri cirodan sayalım (veya hepsini? Önceden hepsiydi ama ödenenler gelmeli. Veya iptalleri düşebiliriz. Mevcut hali korumak için filtersiz mi çeksek? Biz tüm ciroyu alıyorduk. İptalleri çıkartalım).
-          
-      // 3. Günün Giderleri
-      final expensesResponse = await _supabase
-          .from('expenses')
-          .select('amount')
-          .gte('created_at', todayStart);
-
-      // 3. Personel Sayısı (Sadece garsonlar)
+      // 2. Personel Sayısı (Sadece garsonlar)
       final personnelResponse = await _supabase
           .from('profiles')
           .select('id')
           .eq('role', 'garson');
 
-      if (!mounted) return;
-
-      double revenue = 0;
-      final List ordersList = ordersResponse as List;
-      for (var o in ordersList) {
-        if (o['status'] != 'iptal') { // İptal olanları cirodan saymıyoruz
-          revenue += (o['total_amount'] ?? 0.0);
+      // 3. Son Devir kaydını çek
+      final devirResponse = await _supabase
+          .from('devirler')
+          .select()
+          .order('created_at', ascending: false)
+          .limit(1);
+      
+      final List devirList = devirResponse as List;
+      
+      double kasa = 0.0;
+      
+      if (devirList.isNotEmpty) {
+        // Son devir var: kasaya o devir miktarından başla
+        final lastDevir = devirList.first;
+        kasa = (lastDevir['amount'] as num).toDouble();
+        final devirTime = lastDevir['created_at'] as String;
+        
+        // Devir sonrasında ödenen siparişleri topla (kasa artışı)
+        final paidAfterDevir = await _supabase
+            .from('orders')
+            .select('total_amount')
+            .eq('status', 'odendi')
+            .gte('created_at', devirTime);
+        for (var o in (paidAfterDevir as List)) {
+          kasa += (o['total_amount'] as num? ?? 0).toDouble();
+        }
+        
+        // Devir sonrasındaki giderleri düş
+        final expAfterDevir = await _supabase
+            .from('expenses')
+            .select('amount')
+            .gte('created_at', devirTime);
+        for (var e in (expAfterDevir as List)) {
+          kasa -= (e['amount'] as num? ?? 0).toDouble();
+        }
+      } else {
+        // Hiç devir yok: bugünün (03:00 baz) ödenen siparişleri say
+        final now = DateTime.now();
+        DateTime businessStart = DateTime(now.year, now.month, now.day, 3, 0, 0);
+        if (now.hour < 3) businessStart = businessStart.subtract(const Duration(days: 1));
+        final todayStart = businessStart.toIso8601String();
+        
+        final ordersRes = await _supabase
+            .from('orders')
+            .select('total_amount')
+            .eq('status', 'odendi')
+            .gte('created_at', todayStart);
+        for (var o in (ordersRes as List)) {
+          kasa += (o['total_amount'] as num? ?? 0).toDouble();
+        }
+        final expRes = await _supabase
+            .from('expenses')
+            .select('amount')
+            .gte('created_at', todayStart);
+        for (var e in (expRes as List)) {
+          kasa -= (e['amount'] as num? ?? 0).toDouble();
         }
       }
 
-      double totalExpense = 0;
-      final List expensesList = expensesResponse as List;
-      for (var e in expensesList) {
-        totalExpense += (e['amount'] ?? 0.0);
-      }
-
-      final double netRevenue = revenue - totalExpense;
+      if (!mounted) return;
 
       setState(() {
         _activeTablesCount = (tablesResponse as List).length.toString();
-        _todayRevenue = '₺${netRevenue.toStringAsFixed(0)}';
+        _kasaAmount = '₺${kasa.toStringAsFixed(0)}';
         _personnelCount = (personnelResponse as List).length.toString();
       });
     } catch (e) {
@@ -109,7 +132,7 @@ class _ManagerHomeViewState extends State<ManagerHomeView> {
       if (mounted) {
         setState(() {
           _activeTablesCount = "0";
-          _todayRevenue = "₺0";
+          _kasaAmount = "₺0";
           _personnelCount = "0";
         });
       }
@@ -152,10 +175,10 @@ class _ManagerHomeViewState extends State<ManagerHomeView> {
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _showAddExpenseDialog(context),
-        backgroundColor: Colors.red.shade700,
+        onPressed: () => _showActionMenu(context),
+        backgroundColor: Colors.brown.shade800,
         child: const Icon(Icons.add, color: Colors.white),
-        tooltip: 'Gider Ekle',
+        tooltip: 'İşlem Ekle',
       ),
       body: CustomScrollView(
         slivers: [
@@ -206,7 +229,7 @@ class _ManagerHomeViewState extends State<ManagerHomeView> {
                       mainAxisAlignment: MainAxisAlignment.spaceAround,
                       children: [
                         _buildStatItem('Aktif Masalar', _activeTablesCount, Icons.table_restaurant),
-                        _buildStatItem('Günün Cirosu', _todayRevenue, Icons.payments),
+                        _buildStatItem('Kasa', _kasaAmount, Icons.account_balance_wallet),
                         _buildStatItem('Personel', _personnelCount, Icons.people),
                       ],
                     ),
@@ -452,6 +475,158 @@ class _ManagerHomeViewState extends State<ManagerHomeView> {
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700, foregroundColor: Colors.white),
             child: const Text('Gideri Ekle'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showActionMenu(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.money_off, color: Colors.red.shade700),
+                ),
+                title: const Text('Gider Ekle', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                subtitle: const Text('Kasa çıkışı olarak kaydet'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showAddExpenseDialog(context);
+                },
+              ),
+              const Divider(indent: 16, endIndent: 16),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.savings, color: Colors.green.shade700),
+                ),
+                title: const Text('Devir Gir', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                subtitle: const Text('Kasada bırakılan parayı kaydet (gün sonu)'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showDevirDialog(context);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showDevirDialog(BuildContext context) {
+    final TextEditingController amountController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Devir Gir', style: TextStyle(fontWeight: FontWeight.bold)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.green.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.green.shade700, size: 18),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Kasada bırakacağınız miktarı girin. Bu miktar yarın "Kasa" olarak görünecek.',
+                      style: TextStyle(fontSize: 12, color: Colors.black87),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: amountController,
+              keyboardType: TextInputType.number,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Kasada Bırakılan Miktar (₺)',
+                prefixText: '₺ ',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('İptal')),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.savings),
+            onPressed: () async {
+              final amount = double.tryParse(amountController.text.replaceAll(',', '.'));
+              if (amount == null || amount < 0) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Geçerli bir miktar girin.')));
+                return;
+              }
+
+              Navigator.pop(context);
+
+              try {
+                // Devir tablosuna kaydet
+                await _supabase.from('devirler').insert({
+                  'amount': amount,
+                  'description': 'Kasada ₺${amount.toStringAsFixed(0)} para bırakıldı',
+                });
+                // Günün özeti için expenses tablosuna da not düş (negatif değil, sadece log)
+                await _supabase.from('expenses').insert({
+                  'description': '🏦 Devir: Kasada ₺${amount.toStringAsFixed(0)} para bırakıldı',
+                  'amount': 0, // Gider sayılmasın, sadece kayıt
+                });
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Devir kaydedildi! Kasada ₺${amount.toStringAsFixed(0)} bırakıldı.'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                  _loadStats(); // Kasa değerini güncelle
+                }
+              } catch (e) {
+                debugPrint('Devir kayıt hatası: $e');
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white),
+            label: const Text('Deviri Kaydet'),
           ),
         ],
       ),

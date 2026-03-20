@@ -352,13 +352,13 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
       color: Colors.brown.shade900,
       child: Column(
         children: [
-          const SizedBox(height: 40),
+          const SizedBox(height: 25),
           const CircleAvatar(
             backgroundColor: Colors.white24,
-            radius: 30,
-            child: Icon(Icons.point_of_sale, color: Colors.white, size: 30),
+            radius: 25,
+            child: Icon(Icons.point_of_sale, color: Colors.white, size: 25),
           ),
-          const SizedBox(height: 40),
+          const SizedBox(height: 25),
           Expanded(
             child: ListView(
               padding: EdgeInsets.zero,
@@ -369,6 +369,7 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
                 _buildSidebarButton(Icons.category, 'Kategori Ekle', _showAddCategoryDialog),
                 _buildSidebarButton(Icons.delete_sweep, 'Kategori Sil', _showDeleteCategoryDialog),
                 _buildSidebarButton(Icons.lock, 'Ürün Kilitle', _showLockProductDialog),
+                _buildSidebarButton(Icons.add_card, 'İşlem Ekle', _showCashierActionMenu),
                 _buildSidebarButton(Icons.add_to_photos, 'Masa Ekle', _showAddTableDialog),
               ],
             ),
@@ -387,12 +388,12 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
     return InkWell(
       onTap: onTap,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 20),
+        margin: const EdgeInsets.only(bottom: 15),
         child: Column(
           children: [
-            Icon(icon, color: Colors.white70, size: 28),
-            const SizedBox(height: 6),
-            Text(label, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+            Icon(icon, color: Colors.white70, size: 24),
+            const SizedBox(height: 4),
+            Text(label, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.bold)),
           ],
         ),
       ),
@@ -874,6 +875,226 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showAddExpenseDialog() {
+    final TextEditingController descController = TextEditingController();
+    final TextEditingController amountController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Gider Ekle', style: TextStyle(fontWeight: FontWeight.bold)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: descController,
+              decoration: const InputDecoration(labelText: 'Açıklama (Örn: Manav, Temizlik)'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: amountController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Miktar (₺)', prefixText: '₺ '),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('İptal')),
+          ElevatedButton(
+            onPressed: () async {
+              if (descController.text.trim().isEmpty || amountController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lütfen tüm alanları doldurun.')));
+                return;
+              }
+              final amount = double.tryParse(amountController.text.replaceAll(',', '.'));
+              if (amount == null || amount <= 0) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Geçerli bir miktar girin.')));
+                return;
+              }
+
+              Navigator.pop(context); // Dialogu kapat
+
+              // Veritabanına kaydet
+              try {
+                await _supabase.from('expenses').insert({
+                  'description': descController.text.trim(),
+                  'amount': amount,
+                });
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Gider başarıyla eklendi', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green));
+                }
+              } catch (e) {
+                debugPrint('Gider ekleme hatası: $e');
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Gider eklenirken hata: $e')));
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.brown, foregroundColor: Colors.white),
+            child: const Text('Ekle'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCashierActionMenu() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('İşlem Ekle', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.black54)),
+                ),
+              ),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.money_off, color: Colors.red.shade700),
+                ),
+                title: const Text('Gider Ekle', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                subtitle: const Text('Kasa çıkışı olarak kaydet'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showAddExpenseDialog();
+                },
+              ),
+              const Divider(indent: 16, endIndent: 16),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.savings, color: Colors.green.shade700),
+                ),
+                title: const Text('Devir Gir', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                subtitle: const Text('Kasada bırakılan parayı kaydet (gün sonu)'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showDevirDialog();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showDevirDialog() {
+    final TextEditingController amountController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Devir Gir', style: TextStyle(fontWeight: FontWeight.bold)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.green.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.green.shade700, size: 18),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Kasada bırakacağınız miktarı girin. Bu miktar yarın "Kasa" olarak görünecek.',
+                      style: TextStyle(fontSize: 12, color: Colors.black87),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: amountController,
+              keyboardType: TextInputType.number,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Kasada Bırakılan Miktar (₺)',
+                prefixText: '₺ ',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('İptal')),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.savings),
+            onPressed: () async {
+              final amount = double.tryParse(amountController.text.replaceAll(',', '.'));
+              if (amount == null || amount < 0) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Geçerli bir miktar girin.')));
+                return;
+              }
+
+              Navigator.pop(context);
+
+              try {
+                // Devir tablosuna kaydet
+                await _supabase.from('devirler').insert({
+                  'amount': amount,
+                  'description': 'Kasada ₺${amount.toStringAsFixed(0)} para bırakıldı',
+                });
+                // Günün özeti için expenses tablosuna da not düş (gider sayılmasın)
+                await _supabase.from('expenses').insert({
+                  'description': '🏦 Devir: Kasada ₺${amount.toStringAsFixed(0)} para bırakıldı',
+                  'amount': 0,
+                });
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Devir kaydedildi! Kasada ₺${amount.toStringAsFixed(0)} bırakıldı.'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                }
+              } catch (e) {
+                debugPrint('Devir kayıt hatası: $e');
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white),
+            label: const Text('Deviri Kaydet'),
+          ),
+        ],
       ),
     );
   }

@@ -170,7 +170,10 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
                               final time = DateTime.parse(item['created_at']).toLocal();
 
                               if (!isOrder) {
-                                // GİDER ITEM'I
+                                final desc = item['description'] as String? ?? '';
+                                final isDevir = desc.startsWith('🏦 Devir:');
+
+                                // DEVİR veya GİDER ITEM'I
                                 return Container(
                                   margin: const EdgeInsets.only(bottom: 12),
                                   decoration: BoxDecoration(
@@ -185,16 +188,27 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
                                     leading: Container(
                                       padding: const EdgeInsets.all(10),
                                       decoration: BoxDecoration(
-                                        color: Colors.red.shade50,
+                                        color: isDevir ? Colors.green.shade50 : Colors.red.shade50,
                                         borderRadius: BorderRadius.circular(10),
                                       ),
-                                      child: Icon(Icons.money_off, color: Colors.red.shade700),
+                                      child: Icon(
+                                        isDevir ? Icons.savings : Icons.money_off,
+                                        color: isDevir ? Colors.green.shade700 : Colors.red.shade700,
+                                      ),
                                     ),
                                     title: Row(
                                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                       children: [
-                                        Text('Gider: ${item['description']}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                                        Text('-₺${(item['amount'] ?? 0.0).toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.red, fontSize: 16)),
+                                        Expanded(
+                                          child: Text(
+                                            isDevir ? desc : 'Gider: $desc',
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        if (!isDevir)
+                                          Text('-₺${(item['amount'] ?? 0.0).toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.red, fontSize: 16)),
                                       ],
                                     ),
                                     subtitle: Padding(

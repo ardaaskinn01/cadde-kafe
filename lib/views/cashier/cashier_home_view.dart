@@ -29,6 +29,8 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
   
   bool _isLoading = true;
   bool _isMenuLoading = false;
+  bool _isKasaVisible = true;
+  String _kasaAmount = "₺0";
 
   @override
   void initState() {
@@ -79,6 +81,7 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
   void _handleDataChange() {
     if (mounted) {
       _fetchTables();
+      _fetchKasaAmount();
       if (_selectedTableData != null) {
         _fetchOrderDetail(_selectedTableData!);
       }
@@ -90,6 +93,7 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
     await Future.wait([
       _fetchTables(),
       _fetchMenuData(),
+      _fetchKasaAmount(),
     ]);
     setState(() => _isLoading = false);
   }
@@ -138,6 +142,7 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
   }
 
   Future<void> _fetchOrderDetail(Map<String, dynamic> table) async {
+    _fetchKasaAmount(); // Detay her güncellendiğinde kasayı da tazele (ödeme alınmış olabilir)
     setState(() {
       _selectedTableId = table['id'];
       _selectedTableData = table;
@@ -1009,6 +1014,72 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
     );
   }
 
+  Future<void> _fetchKasaAmount() async {
+    try {
+      // 1. Son Devir kaydını çek
+      final devirResponse = await _supabase
+          .from('devirler')
+          .select()
+          .order('created_at', ascending: false)
+          .limit(1);
+      
+      final List devirList = devirResponse as List;
+      double kasa = 0.0;
+      
+      if (devirList.isNotEmpty) {
+        final lastDevir = devirList.first;
+        kasa = (lastDevir['amount'] as num).toDouble();
+        final devirTime = lastDevir['created_at'] as String;
+        
+        final paidAfterDevir = await _supabase
+            .from('orders')
+            .select('total_amount')
+            .eq('status', 'odendi')
+            .gte('created_at', devirTime);
+        for (var o in (paidAfterDevir as List)) {
+          kasa += (o['total_amount'] as num? ?? 0).toDouble();
+        }
+        
+        final expAfterDevir = await _supabase
+            .from('expenses')
+            .select('amount')
+            .gte('created_at', devirTime);
+        for (var e in (expAfterDevir as List)) {
+          kasa -= (e['amount'] as num? ?? 0).toDouble();
+        }
+      } else {
+        final now = DateTime.now();
+        DateTime businessStart = DateTime(now.year, now.month, now.day, 3, 0, 0);
+        if (now.hour < 3) businessStart = businessStart.subtract(const Duration(days: 1));
+        final todayStart = businessStart.toIso8601String();
+        
+        final ordersRes = await _supabase
+            .from('orders')
+            .select('total_amount')
+            .eq('status', 'odendi')
+            .gte('created_at', todayStart);
+        for (var o in (ordersRes as List)) {
+          kasa += (o['total_amount'] as num? ?? 0).toDouble();
+        }
+        final expRes = await _supabase
+            .from('expenses')
+            .select('amount')
+            .gte('created_at', todayStart);
+        for (var e in (expRes as List)) {
+          kasa -= (e['amount'] as num? ?? 0).toDouble();
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _kasaAmount = '₺${kasa.toStringAsFixed(0)}';
+        });
+      }
+    } catch (e) {
+      debugPrint('Kasa miktarı çekme hatası: $e');
+    }
+  }
+
   void _showDevirDialog() {
     final TextEditingController amountController = TextEditingController();
 
@@ -1085,6 +1156,7 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
                       backgroundColor: Colors.green,
                     ),
                   );
+                  _fetchKasaAmount(); // Hemen kasayı güncelle
                 }
               } catch (e) {
                 debugPrint('Devir kayıt hatası: $e');
@@ -1113,6 +1185,14 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
             ],
           ),
           const Spacer(),
+          _buildStatHeader('Kasa', _isKasaVisible ? _kasaAmount : '₺***', Colors.green),
+          const SizedBox(width: 8),
+          IconButton(
+             icon: Icon(_isKasaVisible ? Icons.visibility_off : Icons.visibility, color: Colors.grey, size: 18),
+             onPressed: () => setState(() => _isKasaVisible = !_isKasaVisible),
+             tooltip: _isKasaVisible ? 'Gizle' : 'Göster',
+          ),
+          const SizedBox(width: 20),
           _buildStatHeader('Toplam Masa', _allTables.length.toString(), Colors.blue),
           const SizedBox(width: 30),
           _buildStatHeader('Açık Adisyon', _allTables.where((t) => _isTableOccupied(t)).length.toString(), Colors.orange),
@@ -1346,20 +1426,40 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text('AÇIK SİPARİŞLER', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Colors.grey.shade600)),
-                    InkWell(
-                      onTap: _showAddItemsToOrderDialog,
-                      borderRadius: BorderRadius.circular(8),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(color: Colors.brown, borderRadius: BorderRadius.circular(8)),
-                        child: const Row(
-                          children: [
-                            Icon(Icons.add, size: 14, color: Colors.white),
-                            SizedBox(width: 4),
-                            Text('Eksik Gir', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
-                          ],
+                    Row(
+                      children: [
+                        InkWell(
+                          onTap: _showCalculateDialog,
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(color: Colors.blue.shade700, borderRadius: BorderRadius.circular(8)),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.calculate, size: 14, color: Colors.white),
+                                SizedBox(width: 4),
+                                Text('Hesap Yap', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                              ],
+                            ),
+                          ),
                         ),
-                      ),
+                        const SizedBox(width: 8),
+                        InkWell(
+                          onTap: _showAddItemsToOrderDialog,
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(color: Colors.brown, borderRadius: BorderRadius.circular(8)),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.add, size: 14, color: Colors.white),
+                                SizedBox(width: 4),
+                                Text('Eksik Gir', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -1598,6 +1698,160 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
     }
   }
 
+  void _showCalculateDialog() {
+    if (_activeOrder == null || _orderItems.isEmpty) return;
+
+    // Ödenmemiş ürünleri adetlerine göre tek tek kartlara ayır
+    List<Map<String, dynamic>> expandedUnpaidItems = [];
+    for (var item in _orderItems) {
+      int totalQty = item['quantity'] ?? 0;
+      int paidQty = item['paid_quantity'] ?? 0;
+      int unpaidQty = totalQty - paidQty;
+      
+      if (unpaidQty > 0) {
+        for (int i = 0; i < unpaidQty; i++) {
+          expandedUnpaidItems.add({
+            'order_item_id': item['id'],
+            'name': item['products'] != null ? item['products']['name'] : 'Tanımsız Ürün',
+            'price': (item['unit_price'] ?? 0.0).toDouble(),
+            'unique_id': '${item['id']}_$i', // Seçimleri ayrı tutmak için
+          });
+        }
+      }
+    }
+
+    if (expandedUnpaidItems.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Hesaplanacak açık sipariş bulunmuyor.')));
+      return;
+    }
+
+    // Seçilenleri takip et (unique_id Set'i)
+    Set<String> selectedIds = {};
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          double totalSelectedPrice = 0.0;
+          for (var item in expandedUnpaidItems) {
+            if (selectedIds.contains(item['unique_id'])) {
+              totalSelectedPrice += item['price'] as double;
+            }
+          }
+
+          return AlertDialog(
+            title: const Text('Hesap Yap', style: TextStyle(fontWeight: FontWeight.bold)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            content: SizedBox(
+              width: 450,
+              height: 500,
+              child: Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: const Text('Müşterinin ödeyeceği ürünleri işaretleyin. Alt tarafta toplam tutarı görebilirsiniz.', style: TextStyle(color: Colors.grey, fontSize: 13)),
+                  ),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: expandedUnpaidItems.length,
+                      itemBuilder: (context, index) {
+                        final item = expandedUnpaidItems[index];
+                        final isSelected = selectedIds.contains(item['unique_id']);
+                        
+                        return InkWell(
+                          onTap: () {
+                            setDialogState(() {
+                              if (isSelected) {
+                                selectedIds.remove(item['unique_id']);
+                              } else {
+                                selectedIds.add(item['unique_id']);
+                              }
+                            });
+                          },
+                          borderRadius: BorderRadius.circular(10),
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: isSelected ? Colors.blue.shade50 : Colors.white,
+                              border: Border.all(color: isSelected ? Colors.blue.shade300 : Colors.grey.shade300, width: isSelected ? 2 : 1),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
+                                        color: isSelected ? Colors.blue : Colors.grey,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(child: Text(item['name'] as String, style: TextStyle(fontWeight: isSelected ? FontWeight.bold : FontWeight.normal, fontSize: 15), overflow: TextOverflow.ellipsis)),
+                                    ],
+                                  ),
+                                ),
+                                Text('₺${(item['price'] as double).toStringAsFixed(2)}', style: TextStyle(fontWeight: FontWeight.bold, color: isSelected ? Colors.blue.shade700 : Colors.black87)),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const Divider(height: 30),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Seçili Tutar (${selectedIds.length} ürün):', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blueGrey)),
+                        Text('₺${totalSelectedPrice.toStringAsFixed(2)}', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: Colors.green)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () {
+                setDialogState(() {
+                  selectedIds.clear(); // Tüm seçimleri kaldır
+                });
+              }, child: const Text('Temizle', style: TextStyle(color: Colors.red))),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ElevatedButton(
+                    onPressed: () {
+                      setDialogState(() {
+                        // Eğer hepsi seçiliyse temizle, değilse hepsini seç
+                        if (selectedIds.length == expandedUnpaidItems.length) {
+                          selectedIds.clear();
+                        } else {
+                          selectedIds.addAll(expandedUnpaidItems.map((e) => e['unique_id'] as String));
+                        }
+                      });
+                    },
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.grey.shade200, foregroundColor: Colors.black87),
+                    child: Text(selectedIds.length == expandedUnpaidItems.length ? 'Hiçbirini Seçme' : 'Tümünü Seç'),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+                    child: const Text('Kapat', style: TextStyle(color: Colors.white)),
+                  ),
+                ],
+              )
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   void _showAddItemsToOrderDialog() {
     if (_selectedTableData == null) return;
     
@@ -1606,188 +1860,14 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
 
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          int totalItems = cart.values.fold(0, (sum, val) => sum + val);
-
-          Widget buildProductCard(Map<String, dynamic> prod) {
-            final String prodId = prod['id'].toString();
-            final int qty = cart[prodId] ?? 0;
-            
-            return Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: qty > 0 ? Colors.orange.shade50 : Colors.grey.shade50,
-                borderRadius: BorderRadius.circular(15),
-                border: Border.all(color: qty > 0 ? Colors.orange.shade200 : Colors.grey.shade200),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                   Text(prod['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13), textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis),
-                   const SizedBox(height: 4),
-                   Text('₺${prod['price']}', style: TextStyle(color: Colors.grey.shade600, fontSize: 11)),
-                   const SizedBox(height: 8),
-                   Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        InkWell(
-                          onTap: () {
-                            if (qty > 0) {
-                              setDialogState(() {
-                                cart[prodId] = qty - 1;
-                                if (cart[prodId] == 0) cart.remove(prodId);
-                              });
-                            }
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.all(4),
-                            decoration: BoxDecoration(color: Colors.white, shape: BoxShape.circle, border: Border.all(color: Colors.grey.shade300)),
-                            child: const Icon(Icons.remove, size: 16, color: Colors.brown),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Text(qty.toString(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                        const SizedBox(width: 12),
-                        InkWell(
-                          onTap: () {
-                            if ((prod['price'] as num) <= 0) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Sıfır fiyatlı ürünü masaya ekleyemezsiniz. Lütfen önce menüden fiyatını güncelleyin.')),
-                              );
-                              return;
-                            }
-                            setDialogState(() {
-                              cart[prodId] = qty + 1;
-                            });
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.all(4),
-                            decoration: const BoxDecoration(color: Colors.brown, shape: BoxShape.circle),
-                            child: const Icon(Icons.add, size: 16, color: Colors.white),
-                          ),
-                        ),
-                      ],
-                   ),
-                ],
-              ),
-            );
-          }
-          
-          return AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(_activeOrder == null ? 'Yeni Adisyon Aç' : 'Eksik Ürün Ekle', style: const TextStyle(fontWeight: FontWeight.bold)),
-                if (totalItems > 0)
-                   Text('$totalItems Ürün', style: const TextStyle(fontSize: 14, color: Colors.orange, fontWeight: FontWeight.bold)),
-              ],
-            ),
-            content: SizedBox(
-               width: 900,
-               height: 600,
-               child: _categories.isEmpty 
-                  ? const Center(child: CircularProgressIndicator())
-                  : Column(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: TextField(
-                            decoration: InputDecoration(
-                              hintText: 'Ürün Ara...',
-                              prefixIcon: const Icon(Icons.search, color: Colors.brown),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(10),
-                                borderSide: BorderSide.none,
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(10),
-                                borderSide: BorderSide(color: Colors.grey.shade200),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(10),
-                                borderSide: const BorderSide(color: Colors.brown),
-                              ),
-                              filled: true,
-                              fillColor: Colors.grey.shade50,
-                              contentPadding: const EdgeInsets.symmetric(vertical: 0),
-                            ),
-                            onChanged: (val) {
-                              setDialogState(() {
-                                searchQuery = val.trim();
-                              });
-                            },
-                          ),
-                        ),
-                        Expanded(
-                          child: searchQuery.isNotEmpty
-                            ? GridView.builder(
-                                padding: const EdgeInsets.all(10),
-                                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: 3,
-                                  childAspectRatio: 2.2,
-                                  crossAxisSpacing: 15,
-                                  mainAxisSpacing: 15,
-                                ),
-                                itemCount: _products.where((p) => p['name'].toString().toLowerCase().contains(searchQuery.toLowerCase()) && p['is_available'] != false).length,
-                                itemBuilder: (context, index) {
-                                  final searchProds = _products.where((p) => p['name'].toString().toLowerCase().contains(searchQuery.toLowerCase()) && p['is_available'] != false).toList();
-                                  return buildProductCard(searchProds[index]);
-                                }
-                              )
-                            : DefaultTabController(
-                                length: _categories.length,
-                                child: Column(
-                                  children: [
-                                    TabBar(
-                                      isScrollable: true,
-                                      labelColor: Colors.brown,
-                                      indicatorColor: Colors.brown,
-                                      tabs: _categories.map((c) => Tab(text: c['name'].toString().toUpperCase())).toList(),
-                                    ),
-                                    const SizedBox(height: 15),
-                                    Expanded(
-                                      child: TabBarView(
-                                        children: _categories.map((cat) {
-                                          final catProds = _products.where((p) => p['category_id'] == cat['id'] && p['is_available'] != false).toList();
-                                          return GridView.builder(
-                                            padding: const EdgeInsets.all(10),
-                                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                              crossAxisCount: 3,
-                                              childAspectRatio: 2.2,
-                                              crossAxisSpacing: 15,
-                                              mainAxisSpacing: 15,
-                                            ),
-                                            itemCount: catProds.length,
-                                            itemBuilder: (context, index) {
-                                              return buildProductCard(catProds[index]);
-                                            },
-                                          );
-                                        }).toList(),
-                                      ),
-                                    ),
-                                  ]
-                                )
-                              )
-                        )
-                      ]
-                    )
-            ),
-            actions: [
-               TextButton(onPressed: () => Navigator.pop(context), child: const Text('İptal', style: TextStyle(color: Colors.grey))),
-               ElevatedButton(
-                  onPressed: cart.isEmpty ? null : () {
-                    Navigator.pop(context);
-                    _addItemsToOrder(cart);
-                  },
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.brown, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                  child: const Text('Ürünleri Ekle', style: TextStyle(color: Colors.white)),
-               )
-            ]
-          );
-        }
-      )
+      builder: (context) => _AddItemsDialog(
+        activeOrder: _activeOrder,
+        categories: _categories,
+        products: _products,
+        onConfirm: (cart) {
+          _addItemsToOrder(cart);
+        },
+      ),
     );
   }
 
@@ -1870,3 +1950,319 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
     }
   }
 }
+
+// ─── Ürün Ekleme Diyaloğu (ayrı StatefulWidget: TabController + ok nav + drag scroll) ───
+
+class _AddItemsDialog extends StatefulWidget {
+  final Map<String, dynamic>? activeOrder;
+  final List<Map<String, dynamic>> categories;
+  final List<Map<String, dynamic>> products;
+  final void Function(Map<String, int> cart) onConfirm;
+
+  const _AddItemsDialog({
+    required this.activeOrder,
+    required this.categories,
+    required this.products,
+    required this.onConfirm,
+  });
+
+  @override
+  State<_AddItemsDialog> createState() => _AddItemsDialogState();
+}
+
+class _AddItemsDialogState extends State<_AddItemsDialog>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  Map<String, int> cart = {};
+  String searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: widget.categories.length, vsync: this);
+    _tabController.addListener(() {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  void _goToPrevTab() {
+    if (_tabController.index > 0) {
+      _tabController.animateTo(_tabController.index - 1);
+    }
+  }
+
+  void _goToNextTab() {
+    if (_tabController.index < widget.categories.length - 1) {
+      _tabController.animateTo(_tabController.index + 1);
+    }
+  }
+
+  Widget _buildProductCard(Map<String, dynamic> prod) {
+    final String prodId = prod['id'].toString();
+    final int qty = cart[prodId] ?? 0;
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: qty > 0 ? Colors.orange.shade50 : Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: qty > 0 ? Colors.orange.shade200 : Colors.grey.shade200),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(prod['name'],
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis),
+          const SizedBox(height: 4),
+          Text('₺${prod['price']}', style: TextStyle(color: Colors.grey.shade600, fontSize: 11)),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              InkWell(
+                onTap: () {
+                  if (qty > 0) {
+                    setState(() {
+                      cart[prodId] = qty - 1;
+                      if (cart[prodId] == 0) cart.remove(prodId);
+                    });
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.grey.shade300)),
+                  child: const Icon(Icons.remove, size: 16, color: Colors.brown),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(qty.toString(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(width: 12),
+              InkWell(
+                onTap: () {
+                  if ((prod['price'] as num) <= 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Sıfır fiyatlı ürünü masaya ekleyemezsiniz.')),
+                    );
+                    return;
+                  }
+                  setState(() {
+                    cart[prodId] = qty + 1;
+                  });
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: const BoxDecoration(color: Colors.brown, shape: BoxShape.circle),
+                  child: const Icon(Icons.add, size: 16, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final int totalItems = cart.values.fold(0, (sum, val) => sum + val);
+    final bool canGoPrev = _tabController.index > 0;
+    final bool canGoNext = _tabController.index < widget.categories.length - 1;
+
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(widget.activeOrder == null ? 'Yeni Adisyon Aç' : 'Eksik Ürün Ekle',
+              style: const TextStyle(fontWeight: FontWeight.bold)),
+          if (totalItems > 0)
+            Text('$totalItems Ürün',
+                style: const TextStyle(fontSize: 14, color: Colors.orange, fontWeight: FontWeight.bold)),
+        ],
+      ),
+      content: SizedBox(
+        width: 900,
+        height: 600,
+        child: widget.categories.isEmpty
+            ? const Center(child: CircularProgressIndicator())
+            : Column(
+                children: [
+                  // Arama Çubuğu
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: TextField(
+                      decoration: InputDecoration(
+                        hintText: 'Ürün Ara...',
+                        prefixIcon: const Icon(Icons.search, color: Colors.brown),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide.none,
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide(color: Colors.grey.shade200),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Colors.brown),
+                        ),
+                        filled: true,
+                        fillColor: Colors.grey.shade50,
+                        contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                      ),
+                      onChanged: (val) => setState(() => searchQuery = val.trim()),
+                    ),
+                  ),
+                  // İçerik
+                  Expanded(
+                    child: searchQuery.isNotEmpty
+                        ? GridView.builder(
+                            padding: const EdgeInsets.all(10),
+                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 3,
+                              childAspectRatio: 2.2,
+                              crossAxisSpacing: 15,
+                              mainAxisSpacing: 15,
+                            ),
+                            itemCount: widget.products
+                                .where((p) =>
+                                    p['name'].toString().toLowerCase().contains(searchQuery.toLowerCase()) &&
+                                    p['is_available'] != false)
+                                .length,
+                            itemBuilder: (context, index) {
+                              final searchProds = widget.products
+                                  .where((p) =>
+                                      p['name'].toString().toLowerCase().contains(searchQuery.toLowerCase()) &&
+                                      p['is_available'] != false)
+                                  .toList();
+                              return _buildProductCard(searchProds[index]);
+                            },
+                          )
+                        : Column(
+                            children: [
+                              // Kategoriler: sol ok + sürüklenebilir TabBar + sağ ok
+                              Row(
+                                children: [
+                                  // Sol Ok
+                                  AnimatedOpacity(
+                                    opacity: canGoPrev ? 1.0 : 0.25,
+                                    duration: const Duration(milliseconds: 200),
+                                    child: InkWell(
+                                      onTap: canGoPrev ? _goToPrevTab : null,
+                                      borderRadius: BorderRadius.circular(20),
+                                      child: Container(
+                                        padding: const EdgeInsets.all(6),
+                                        decoration: BoxDecoration(
+                                          color: Colors.brown.shade50,
+                                          borderRadius: BorderRadius.circular(20),
+                                        ),
+                                        child: const Icon(Icons.chevron_left, color: Colors.brown, size: 22),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  // TabBar (fare ile sürüklenebilir)
+                                  Expanded(
+                                    child: GestureDetector(
+                                      onHorizontalDragUpdate: (details) {
+                                        if (details.delta.dx < -30) {
+                                          _goToNextTab();
+                                        } else if (details.delta.dx > 30) {
+                                          _goToPrevTab();
+                                        }
+                                      },
+                                      child: TabBar(
+                                        controller: _tabController,
+                                        isScrollable: true,
+                                        labelColor: Colors.brown,
+                                        indicatorColor: Colors.brown,
+                                        tabs: widget.categories
+                                            .map((c) => Tab(text: c['name'].toString().toUpperCase()))
+                                            .toList(),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  // Sağ Ok
+                                  AnimatedOpacity(
+                                    opacity: canGoNext ? 1.0 : 0.25,
+                                    duration: const Duration(milliseconds: 200),
+                                    child: InkWell(
+                                      onTap: canGoNext ? _goToNextTab : null,
+                                      borderRadius: BorderRadius.circular(20),
+                                      child: Container(
+                                        padding: const EdgeInsets.all(6),
+                                        decoration: BoxDecoration(
+                                          color: Colors.brown.shade50,
+                                          borderRadius: BorderRadius.circular(20),
+                                        ),
+                                        child: const Icon(Icons.chevron_right, color: Colors.brown, size: 22),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              // Ürün Grid'i
+                              Expanded(
+                                child: TabBarView(
+                                  controller: _tabController,
+                                  children: widget.categories.map((cat) {
+                                    final catProds = widget.products
+                                        .where((p) =>
+                                            p['category_id'] == cat['id'] &&
+                                            p['is_available'] != false)
+                                        .toList();
+                                    return GridView.builder(
+                                      padding: const EdgeInsets.all(10),
+                                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                        crossAxisCount: 3,
+                                        childAspectRatio: 2.2,
+                                        crossAxisSpacing: 15,
+                                        mainAxisSpacing: 15,
+                                      ),
+                                      itemCount: catProds.length,
+                                      itemBuilder: (context, index) =>
+                                          _buildProductCard(catProds[index]),
+                                    );
+                                  }).toList(),
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                ],
+              ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('İptal', style: TextStyle(color: Colors.grey))),
+        ElevatedButton(
+          onPressed: cart.isEmpty
+              ? null
+              : () {
+                  Navigator.pop(context);
+                  widget.onConfirm(cart);
+                },
+          style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.brown,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+          child: const Text('Ürünleri Ekle', style: TextStyle(color: Colors.white)),
+        ),
+      ],
+    );
+  }
+}
+

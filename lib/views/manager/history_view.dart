@@ -369,6 +369,9 @@ class _HistoryViewState extends State<HistoryView> with SingleTickerProviderStat
 
   Widget _buildExpenseCard(Map<String, dynamic> expense) {
     final time = DateTime.parse(expense['created_at']).toLocal();
+    final String desc = expense['description'] as String? ?? '';
+    final bool isDevir = desc.startsWith('🏦 Devir:');
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
@@ -383,15 +386,25 @@ class _HistoryViewState extends State<HistoryView> with SingleTickerProviderStat
         children: [
           Container(
             padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(10)),
-            child: Icon(Icons.money_off, color: Colors.red.shade700, size: 20),
+            decoration: BoxDecoration(
+              color: isDevir ? Colors.green.shade50 : Colors.red.shade50,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              isDevir ? Icons.savings : Icons.money_off,
+              color: isDevir ? Colors.green.shade700 : Colors.red.shade700,
+              size: 20,
+            ),
           ),
           const SizedBox(width: 15),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Gider: ${expense['description']}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                Text(
+                  isDevir ? desc : 'Gider: $desc',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                ),
                 Text(
                   DateFormat('dd/MM/yyyy HH:mm').format(time),
                   style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
@@ -399,10 +412,11 @@ class _HistoryViewState extends State<HistoryView> with SingleTickerProviderStat
               ],
             ),
           ),
-          Text(
-            '-₺${(expense['amount'] ?? 0.0).toStringAsFixed(2)}',
-            style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.red, fontSize: 16),
-          ),
+          if (!isDevir)
+            Text(
+              '-₺${(expense['amount'] ?? 0.0).toStringAsFixed(2)}',
+              style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.red, fontSize: 16),
+            ),
         ],
       ),
     );

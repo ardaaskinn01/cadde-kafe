@@ -1839,6 +1839,61 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
                   ),
                   const SizedBox(width: 8),
                   ElevatedButton(
+                    onPressed: selectedIds.isEmpty ? null : () async {
+                      // Kapat diyaloğu
+                      Navigator.pop(context);
+                      
+                      // İşlemi yap
+                      setState(() => _isLoading = true);
+                      try {
+                        // Seçili ürünlerin id ve adetlerini toparla
+                        Map<String, int> qtyToPayMap = {};
+                        for (String uid in selectedIds) {
+                          String orderItemId = uid.split('_')[0];
+                          qtyToPayMap[orderItemId] = (qtyToPayMap[orderItemId] ?? 0) + 1;
+                        }
+
+                        // Her bir order_item_id için paid_quantity'yi veritabanında güncelle
+                        for (var entry in qtyToPayMap.entries) {
+                          String orderItemId = entry.key;
+                          int payQty = entry.value;
+
+                          var item = _orderItems.firstWhere((element) => element['id'].toString() == orderItemId);
+                          int currentPaidQty = (item['paid_quantity'] as int? ?? 0);
+                          
+                          await _supabase.from('order_items').update({
+                            'paid_quantity': currentPaidQty + payQty
+                          }).eq('id', orderItemId);
+                        }
+
+                        // Order tablosundaki paid_amount'u güncelle
+                        double currentPaid = (_activeOrder!['paid_amount'] as num? ?? 0).toDouble();
+                        await _supabase.from('orders').update({
+                          'paid_amount': currentPaid + totalSelectedPrice
+                        }).eq('id', _activeOrder!['id']);
+
+                        // Tüm sipariş ödendi mi kontrolü
+                        await _checkOrderCompletion();
+                        
+                        // Ekranı tazele
+                        if (_selectedTableData != null) {
+                           _fetchOrderDetail(_selectedTableData!);
+                        }
+                      } catch (e) {
+                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+                      } finally {
+                         setState(() => _isLoading = false);
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      disabledBackgroundColor: Colors.grey.shade300,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('Öde', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
                     onPressed: () => Navigator.pop(context),
                     style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
                     child: const Text('Kapat', style: TextStyle(color: Colors.white)),

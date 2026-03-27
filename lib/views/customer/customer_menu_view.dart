@@ -168,7 +168,7 @@ class _CustomerMenuViewState extends State<CustomerMenuView> {
         centerTitle: true,
         titlePadding: const EdgeInsets.only(bottom: 16),
         title: const Text(
-          'CADDE KAFE',
+          'DE\' LARA LOUNGE',
           style: TextStyle(
             color: Colors.white,
             fontWeight: FontWeight.w900,

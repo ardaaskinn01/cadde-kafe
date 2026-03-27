@@ -113,7 +113,7 @@ class _LoginViewState extends State<LoginView> {
                   ),
                   const SizedBox(height: 30),
                   const Text(
-                    'CADDE KAFE',
+                    'DE\' LARA LOUNGE',
                     style: TextStyle(
                       fontSize: 32,
                       fontWeight: FontWeight.w900,

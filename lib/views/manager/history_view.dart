@@ -17,7 +17,9 @@ class _HistoryViewState extends State<HistoryView> with SingleTickerProviderStat
   DateTime _selectedDate = DateTime.now();
   
   // İstatistik Verileri
-  double _totalRevenue = 0.0;
+  double _grossRevenue = 0.0;
+  double _totalExpenses = 0.0;
+  double _netRevenue = 0.0;
   int _orderCount = 0;
   List<Map<String, dynamic>> _transactions = [];
 
@@ -119,7 +121,9 @@ class _HistoryViewState extends State<HistoryView> with SingleTickerProviderStat
       if (mounted) {
         setState(() {
           _transactions = mergedList;
-          _totalRevenue = revenue - totalExpense;
+          _grossRevenue = revenue;
+          _totalExpenses = totalExpense;
+          _netRevenue = revenue - totalExpense;
           _orderCount = fetchedOrders.length;
         });
       }
@@ -308,11 +312,23 @@ class _HistoryViewState extends State<HistoryView> with SingleTickerProviderStat
                   ],
                 ),
                 const SizedBox(height: 20),
-                Row(
+                Column(
                   children: [
-                    _buildQuickStat('Toplam Ciro', '₺${_totalRevenue.toStringAsFixed(2)}', Colors.green),
-                    const SizedBox(width: 12),
-                    _buildQuickStat('İşlem Sayısı', '$_orderCount', Colors.blue),
+                    Row(
+                      children: [
+                        _buildQuickStat('Toplam Ciro', '₺${_grossRevenue.toStringAsFixed(2)}', Colors.blue),
+                        const SizedBox(width: 12),
+                        _buildQuickStat('Giderler', '₺${_totalExpenses.toStringAsFixed(2)}', Colors.red),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        _buildQuickStat('Net Kalan', '₺${_netRevenue.toStringAsFixed(2)}', Colors.green),
+                        const SizedBox(width: 12),
+                        _buildQuickStat('İşlem Sayısı', '$_orderCount', Colors.orange),
+                      ],
+                    ),
                   ],
                 ),
               ],

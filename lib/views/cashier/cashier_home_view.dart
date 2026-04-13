@@ -175,6 +175,29 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
     }
   }
 
+  Future<void> _syncOrderTotals(String orderId) async {
+    try {
+      final itemsRes = await _supabase.from('order_items').select().eq('order_id', orderId);
+      final items = List<Map<String, dynamic>>.from(itemsRes);
+      
+      double totalAmount = 0;
+      double paidAmount = 0;
+      
+      for (var item in items) {
+        double unitPrice = (item['unit_price'] as num).toDouble();
+        totalAmount += (item['quantity'] as int) * unitPrice;
+        paidAmount += (item['paid_quantity'] as int? ?? 0) * unitPrice;
+      }
+      
+      await _supabase.from('orders').update({
+        'total_amount': totalAmount,
+        'paid_amount': paidAmount,
+      }).eq('id', orderId);
+    } catch (e) {
+      debugPrint('Total senkronizasyon hatası: $e');
+    }
+  }
+
   Future<void> _updateItemQuantity(Map<String, dynamic> item, int newQty) async {
     if (newQty < 0) return;
     
@@ -188,14 +211,8 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
         await _supabase.from('order_items').update({'quantity': newQty}).eq('id', item['id']);
       }
 
-      // Sipariş toplamını yeniden hesapla
-      double newTotal = 0;
-      final currentItems = await _supabase.from('order_items').select().eq('order_id', _activeOrder!['id']);
-      for (var i in currentItems) {
-        newTotal += (i['quantity'] as int) * (i['unit_price'] as num).toDouble();
-      }
-
-      await _supabase.from('orders').update({'total_amount': newTotal}).eq('id', _activeOrder!['id']);
+      // Sipariş toplamlarını yeniden hesapla (Güvenli yaklaşım)
+      await _syncOrderTotals(_activeOrder!['id']);
       
       // Eğer tüm ürünler silindiyse masayı kapat/iptal et
       await _checkOrderCompletion();
@@ -211,19 +228,14 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
 
   Future<void> _partialPayment(Map<String, dynamic> item, int payQty) async {
     try {
-      double paymentAmount = payQty * (item['unit_price'] as num).toDouble();
-      double currentPaid = (_activeOrder!['paid_amount'] as num? ?? 0).toDouble();
-      
-      // Ödenen adeti güncelle (Silme yapmıyoruz!)
+      // Ödenen adeti güncelle
       int currentPaidQty = (item['paid_quantity'] as int? ?? 0);
       await _supabase.from('order_items').update({
         'paid_quantity': currentPaidQty + payQty
       }).eq('id', item['id']);
 
-      // Siparişin toplam ödenen miktarını arttır
-      await _supabase.from('orders').update({
-        'paid_amount': currentPaid + paymentAmount
-      }).eq('id', _activeOrder!['id']);
+      // Siparişin toplamlarını yeniden hesapla (Güvenli yaklaşım)
+      await _syncOrderTotals(_activeOrder!['id']);
 
       // Masa durumunu kontrol et
       await _checkOrderCompletion();
@@ -1866,11 +1878,8 @@ class _CashierHomeViewState extends State<CashierHomeView> with SingleTickerProv
                           }).eq('id', orderItemId);
                         }
 
-                        // Order tablosundaki paid_amount'u güncelle
-                        double currentPaid = (_activeOrder!['paid_amount'] as num? ?? 0).toDouble();
-                        await _supabase.from('orders').update({
-                          'paid_amount': currentPaid + totalSelectedPrice
-                        }).eq('id', _activeOrder!['id']);
+                        // Sipariş tablosundaki paid_amount ve total_amount'u yeniden hesapla (Güvenli yaklaşım)
+                        await _syncOrderTotals(_activeOrder!['id']);
 
                         // Tüm sipariş ödendi mi kontrolü
                         await _checkOrderCompletion();

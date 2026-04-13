@@ -12,7 +12,9 @@ class TodaysStatusView extends StatefulWidget {
 class _TodaysStatusViewState extends State<TodaysStatusView> {
   final _supabase = SupabaseService.instance.client;
   bool _isLoading = true;
-  double _totalRevenue = 0.0;
+  double _grossRevenue = 0.0;
+  double _totalExpenses = 0.0;
+  double _netRevenue = 0.0;
   int _totalOrders = 0;
   List<Map<String, dynamic>> _todayTransactions = [];
 
@@ -75,8 +77,10 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
 
       setState(() {
         _todayTransactions = transactions;
-        _totalRevenue = revenue - totalExpense;
-        _totalOrders = orders.length; // Toplam işlem sayısı yerine sipariş adedi kalabilir
+        _grossRevenue = revenue;
+        _totalExpenses = totalExpense;
+        _netRevenue = revenue - totalExpense;
+        _totalOrders = orders.length;
       });
     } catch (e) {
       debugPrint('Error fetching todays data: $e');
@@ -113,24 +117,51 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
                 SliverToBoxAdapter(
                   child: Container(
                     padding: const EdgeInsets.all(20),
-                    child: Row(
+                    child: Column(
                       children: [
-                        Expanded(
-                          child: _buildStatCard(
-                            'Toplam Ciro',
-                            '₺${_totalRevenue.toStringAsFixed(2)}',
-                            Icons.payments_rounded,
-                            Colors.green,
-                          ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildStatCard(
+                                'Toplam Ciro',
+                                '₺${_grossRevenue.toStringAsFixed(2)}',
+                                Icons.payments_rounded,
+                                Colors.blue,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: _buildStatCard(
+                                'Giderler',
+                                '₺${_totalExpenses.toStringAsFixed(2)}',
+                                Icons.money_off_rounded,
+                                Colors.red,
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: _buildStatCard(
-                            'Sipariş Adedi',
-                            _totalOrders.toString(),
-                            Icons.receipt_long_rounded,
-                            Colors.blue,
-                          ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildStatCard(
+                                'Kalan Ciro (Net)',
+                                '₺${_netRevenue.toStringAsFixed(2)}',
+                                Icons.account_balance_wallet_rounded,
+                                Colors.green,
+                                isPrimary: true,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: _buildStatCard(
+                                'Sipariş Adedi',
+                                _totalOrders.toString(),
+                                Icons.receipt_long_rounded,
+                                Colors.orange,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -422,19 +453,20 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
     );
   }
 
-  Widget _buildStatCard(String title, String value, IconData icon, Color color) {
+  Widget _buildStatCard(String title, String value, IconData icon, Color color, {bool isPrimary = false}) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isPrimary ? color : Colors.white,
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: color.withOpacity(0.05),
+            color: color.withOpacity(isPrimary ? 0.3 : 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
         ],
+        border: isPrimary ? null : Border.all(color: Colors.grey.shade100),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -442,20 +474,28 @@ class _TodaysStatusViewState extends State<TodaysStatusView> {
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
+              color: isPrimary ? Colors.white.withOpacity(0.2) : color.withOpacity(0.1),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(icon, color: color, size: 24),
+            child: Icon(icon, color: isPrimary ? Colors.white : color, size: 24),
           ),
           const SizedBox(height: 12),
           Text(
             title,
-            style: TextStyle(color: Colors.grey.shade600, fontSize: 13, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              color: isPrimary ? Colors.white.withOpacity(0.8) : Colors.grey.shade600,
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+            ),
           ),
           const SizedBox(height: 4),
           Text(
             value,
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Colors.black87),
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+              color: isPrimary ? Colors.white : Colors.black87,
+            ),
           ),
         ],
       ),

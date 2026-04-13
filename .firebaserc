@@ -1,5 +1,7 @@
 {
   "projects": {
-    "default": "cadde-kafe"
-  }
+    "default": "delaralounge"
+  },
+  "targets": {},
+  "etags": {}
 }
